@@ -1,24 +1,46 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const Lexer = @import("lex.zig").Lexer;
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+const max_file_size = std.math.maxInt(u32);
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
+    var file = try std.fs.cwd().openFile(input_filename, .{});
+    defer file.close();
+    const stat = try file.stat();
+    if (stat.size > max_file_size) {
+        std.log.err("File size too large, must be at most {} bytes", .{max_file_size});
+        std.process.exit(1);
+    }
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    const source = try gpa.allocSentinel(u8, @intCast(stat.size), 0);
+    const size = try file.readAll(source);
+    if (stat.size != size) {
+        std.log.err("Failed to read entire source file", .{});
+        std.process.exit(1);
+    }
 
-    try bw.flush(); // don't forget to flush!
+    return source;
 }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+pub fn main() !void {
+    var allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    const gpa = allocator.allocator();
+    // var arena = std.heap.ArenaAllocator.init(gpa);
+    // defer arena.deinit();
+
+    var args = try std.process.argsWithAllocator(gpa);
+    defer args.deinit();
+
+    _ = args.next(); // skip executable
+    const filename = args.next();
+
+    const source: [:0]const u8 = try readSource(gpa, filename.?);
+    var lexer = Lexer.init(source);
+
+    while (true) {
+        const token = lexer.next();
+        std.debug.print("{} ", .{token.tag});
+        if (token.tag == .eof) break;
+    }
 }
