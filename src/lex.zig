@@ -926,12 +926,16 @@ pub const Lexer = struct {
 };
 
 fn testLex(source: [:0]const u8, expected_token_tags: []const Token.Tag) !void {
-    var lexer = Lexer.init(source);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var lexer = try Lexer.init(source, allocator);
     for (expected_token_tags) |expected_token_tag| {
-        const token = lexer.next();
+        const token = try lexer.next(allocator);
         try std.testing.expectEqual(expected_token_tag, token.tag);
     }
-    const eof = lexer.next();
+    const eof = try lexer.next(allocator);
     try std.testing.expectEqual(Token.Tag.eof, eof.tag);
     try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.start);
     try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.end);
