@@ -431,6 +431,12 @@ pub const Lexer = struct {
                     ' ' => spaces += 1,
                     '\t' => spaces = (spaces + 7) / 8 * 8,
                     '#' => state = .line_comment,
+                    // TODO: support other types of return (CR)
+                    '\n' => {
+                        spaces = 0;
+                        state = .start;
+                        result.loc.start = self.index + 1;
+                    },
                     else => {
                         const top = self.indents.items[self.indents.items.len - 1];
                         if (spaces > top) {
