@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 // each token contains a type (tag), start, and end index in the source string
 pub const Token = struct {
@@ -14,6 +15,9 @@ pub const Token = struct {
         // lexer flow control
         invalid,
         eof,
+        newline,
+        indent,
+        dedent,
 
         // literals
         ident,
@@ -162,13 +166,18 @@ pub const Token = struct {
 pub const Lexer = struct {
     // source code being analyzed
     source: [:0]const u8,
+    // keeps track of the indent level
+    indents: std.ArrayListUnmanaged(u32),
     // current lexer index in source
     index: u32,
-    // most recent integer literal parsed
-    int_value: u64,
+    // allows us to maintain an "emit single token per next() call"
+    // API even though indent changes can cause multiple dedents
+    dedent_queue: u32,
 
     const State = enum {
         start,
+        carriage_return,
+        indent,
 
         // named things
         ident,
@@ -209,23 +218,37 @@ pub const Lexer = struct {
         line_comment,
     };
 
-    pub fn init(source: [:0]const u8) Lexer {
-        return Lexer.init_index(source, 0);
+    pub fn init(source: [:0]const u8, arena: Allocator) !Lexer {
+        return Lexer.init_index(source, arena, 0);
     }
 
-    pub fn init_index(source: [:0]const u8, index: u32) Lexer {
+    pub fn init_index(source: [:0]const u8, arena: Allocator, index: u32) !Lexer {
         // we only parse <= ~4GiB files (u32_max characters)
         std.debug.assert(source.len <= std.math.maxInt(u32)); // TODO: nice error
 
-        return Lexer{
+        var lexer = Lexer{
             .source = source,
             .index = index,
-            .int_value = undefined,
+            .indents = .{},
+            .dedent_queue = 0,
         };
+        try lexer.indents.ensureTotalCapacity(arena, 1 + 4);
+        lexer.indents.appendAssumeCapacity(0);
+
+        return lexer;
     }
 
-    pub fn next(self: *Lexer) Token {
-        var state: State = .start;
+    pub fn next(self: *Lexer, arena: Allocator) !Token {
+        // start of file
+        var line_start = self.index == 0;
+        // end of LF (Unix) or CR LF (DOS)
+        line_start = line_start or (self.source[self.index - 1] == '\n');
+        // end of CR (Macintosh), but not between CR and LF
+        line_start = line_start or ((self.source[self.index - 1] == '\r') and (self.source[self.index] != '\n'));
+
+        // we have a special state for parsing start of line indents
+        var state: State = if (line_start) .indent else .start;
+
         var result = Token{
             .tag = .eof,
             .loc = .{
@@ -234,9 +257,24 @@ pub const Lexer = struct {
             },
         };
 
+        // first, flush the dedent queue
+        if (self.dedent_queue > 0) {
+            self.dedent_queue -= 1;
+            result.tag = .dedent;
+            return result;
+        }
+
+        // used to calculate the space expansion of indents
+        var spaces: u32 = 0;
+        // TODO: I don't like this, but its the easiest way to disable
+        // the continue expression transitioning out of .indent
+        var back = false;
+
         // finite state machine that parses one character at a time
         // the state starts with .start, where we parse (almost) any
         // character and decide what to do with it
+        // or .indent, where we parse whitespaces and do some cursed
+        // calculations until we see a non-whitespace.
         // 0 = null terminator
         // single character tokens are returned immediately, while
         // multi character tokens (multi character operators, keywords,
@@ -248,26 +286,30 @@ pub const Lexer = struct {
         // break but don't increment the index
         // else, the while loop predicate will increment automatically
         while (true) : (self.index += 1) {
+            // TODO: can we remove this? we really should
+            if (back) {
+                self.index -= 1;
+                back = false;
+            }
             // switch on the state, and then the current character c
             const c = self.source[self.index];
             switch (state) {
                 .start => switch (c) {
                     // eof
                     0 => {
-                        if (self.index != self.source.len) {
-                            result.tag = .invalid;
-                            result.loc.start = self.index;
-                            self.index += 1;
-                            result.loc.end = self.index;
-                            return result;
-                        }
+                        if (self.validateEof()) |token| result = token;
                         break;
                     },
 
-                    // whitespace
-                    ' ', '\n', '\r', '\t' => {
-                        result.loc.start = self.index + 1;
+                    '\n' => {
+                        result.tag = .newline;
+                        self.index += 1;
+                        break;
                     },
+                    '\r' => state = .carriage_return,
+
+                    // whitespace
+                    ' ', '\t' => result.loc.start = self.index + 1,
 
                     // identifier
                     'a'...'e', 'g'...'z', 'A'...'E', 'G'...'Z' => {
@@ -288,11 +330,11 @@ pub const Lexer = struct {
                     // number literal
                     '0' => {
                         state = .radix;
-                        self.int_value = 0;
+                        // self.int_value = 0;
                     },
                     '1'...'9' => {
                         state = .decimal;
-                        self.int_value = c - '0';
+                        // self.int_value = c - '0';
                     },
 
                     // punctuation
@@ -369,6 +411,61 @@ pub const Lexer = struct {
                         break;
                     },
                 },
+                .carriage_return => switch (c) {
+                    '\n' => {
+                        result.tag = .newline;
+                        self.index += 1;
+                        break;
+                    },
+                    else => {
+                        result.tag = .newline;
+                        break;
+                    },
+                },
+                .indent => switch (c) {
+                    // eof
+                    0 => {
+                        if (self.validateEof()) |token| result = token;
+                        break;
+                    },
+                    ' ' => spaces += 1,
+                    '\t' => spaces = (spaces + 7) / 8 * 8,
+                    '#' => state = .line_comment,
+                    else => {
+                        const top = self.indents.items[self.indents.items.len - 1];
+                        if (spaces > top) {
+                            // to improve the API, we have the caller reserve
+                            // space in this indents stack.
+                            try self.indents.append(arena, spaces);
+                            result.tag = .indent;
+                            break;
+                        } else if (spaces < top) {
+                            // queue up all the dedents we need to emit
+                            std.debug.assert(self.dedent_queue == 0);
+                            while (self.indents.getLast() > spaces) {
+                                std.debug.assert(self.indents.pop() != 0);
+                                self.dedent_queue += 1;
+                            }
+
+                            // then emit the first one and exit.
+                            self.dedent_queue -= 1;
+                            result.tag = .dedent;
+                            break;
+                        } else {
+                            state = .start;
+                            result.loc.start = self.index;
+                            // std.debug.print("'{c}' {}\n", .{ c, self.index });
+                            // continue;
+                            // TODO: this is gross, but we need to *not*
+                            // consume the current character and still get
+                            // back to start (not emit a token) so we...
+                            // * can't break
+                            // * can't use continue (still post increments)
+                            // * can't subtract from self.index in case it's 0
+                            back = true;
+                        }
+                    },
+                },
                 .ident => switch (c) {
                     'a'...'z', 'A'...'Z', '_', '0'...'9' => {},
                     else => {
@@ -402,7 +499,7 @@ pub const Lexer = struct {
                     'x' => state = .hex,
                     '0'...'9' => {
                         state = .decimal;
-                        self.int_value = c - '0';
+                        // self.int_value = c - '0';
                     },
                     '.' => if (self.source[self.index + 1] == '.') {
                         result.tag = .int_lit;
@@ -423,7 +520,7 @@ pub const Lexer = struct {
                     },
                 },
                 .binary => switch (c) {
-                    '0'...'1' => self.int_value = (self.int_value << 1) | ((c - '0') & 1),
+                    '0'...'1' => {}, //self.int_value = (self.int_value << 1) | ((c - '0') & 1),
                     '_' => {},
                     '2'...'9', 'a'...'z', 'A'...'Z' => {
                         while (true) {
@@ -442,7 +539,7 @@ pub const Lexer = struct {
                     },
                 },
                 .octal => switch (c) {
-                    '0'...'7' => self.int_value = (self.int_value << 3) | ((c - '0') & 7),
+                    '0'...'7' => {}, //self.int_value = (self.int_value << 3) | ((c - '0') & 7),
                     '_' => {},
                     '8'...'9', 'a'...'z', 'A'...'Z' => {
                         while (true) {
@@ -461,7 +558,7 @@ pub const Lexer = struct {
                     },
                 },
                 .decimal => switch (c) {
-                    '0'...'9' => self.int_value = (self.int_value * 10) + (c - '0'),
+                    '0'...'9' => {}, //self.int_value = (self.int_value * 10) + (c - '0'),
                     '_' => {},
                     '.', 'e' => state = .float_base,
                     'a'...'d', 'f'...'z', 'A'...'Z' => {
@@ -477,14 +574,14 @@ pub const Lexer = struct {
                     },
                 },
                 .hex => switch (c) {
-                    '0'...'9' => self.int_value = (self.int_value << 4) | ((c - '0') & 0xF),
+                    '0'...'9' => {}, //self.int_value = (self.int_value << 4) | ((c - '0') & 0xF),
                     'a'...'f' => {
-                        const digit = (c - 'a' + 10) & 0xF;
-                        self.int_value = (self.int_value << 4) | digit;
+                        // const digit = (c - 'a' + 10) & 0xF;
+                        // self.int_value = (self.int_value << 4) | digit;
                     },
                     'A'...'F' => {
-                        const digit = (c - 'A' + 10) & 0xF;
-                        self.int_value = (self.int_value << 4) | digit;
+                        // const digit = (c - 'A' + 10) & 0xF;
+                        // self.int_value = (self.int_value << 4) | digit;
                     },
                     '_' => {},
                     'g'...'z', 'G'...'Z' => {
@@ -769,9 +866,11 @@ pub const Lexer = struct {
                     },
                 },
                 .line_comment => switch (c) {
+                    '\r' => state = .carriage_return,
                     '\n' => {
                         result.loc.start = self.index + 1;
-                        state = .start;
+                        spaces = 0;
+                        state = .indent;
                     },
                     0 => {
                         state = .start;
@@ -804,6 +903,26 @@ pub const Lexer = struct {
 
         return length;
     }
+
+    fn validateEof(self: *Lexer) ?Token {
+        if (self.index != self.source.len) {
+            self.index += 1;
+            return Token{
+                .tag = .invalid,
+                .loc = .{ .start = self.index - 1, .end = self.index },
+            };
+        } else if (self.indents.items.len > 1) {
+            const indent = self.indents.pop();
+            std.debug.assert(indent != 0);
+
+            return Token{
+                .tag = .dedent,
+                .loc = .{ .start = self.index, .end = self.index + 1 },
+            };
+        } else {
+            return null;
+        }
+    }
 };
 
 fn testLex(source: [:0]const u8, expected_token_tags: []const Token.Tag) !void {
@@ -818,22 +937,22 @@ fn testLex(source: [:0]const u8, expected_token_tags: []const Token.Tag) !void {
     try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.end);
 }
 
-fn testParseInt(source: [:0]const u8, expected_token_tags: []const Token.Tag, expected_literals: []const u64) !void {
-    var lexer = Lexer.init(source);
-    var literal_i: usize = 0;
-    for (expected_token_tags) |expected_token_tag| {
-        const token = lexer.next();
-        try std.testing.expectEqual(expected_token_tag, token.tag);
-        if (expected_token_tag == .int_lit) {
-            try std.testing.expectEqual(lexer.int_value, expected_literals[literal_i]);
-            literal_i += 1;
-        }
-    }
-    const eof = lexer.next();
-    try std.testing.expectEqual(Token.Tag.eof, eof.tag);
-    try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.start);
-    try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.end);
-}
+// fn testParseInt(source: [:0]const u8, expected_token_tags: []const Token.Tag, expected_literals: []const u64) !void {
+//     var lexer = Lexer.init(source);
+//     var literal_i: usize = 0;
+//     for (expected_token_tags) |expected_token_tag| {
+//         const token = lexer.next();
+//         try std.testing.expectEqual(expected_token_tag, token.tag);
+//         if (expected_token_tag == .int_lit) {
+//             try std.testing.expectEqual(lexer.int_value, expected_literals[literal_i]);
+//             literal_i += 1;
+//         }
+//     }
+//     const eof = lexer.next();
+//     try std.testing.expectEqual(Token.Tag.eof, eof.tag);
+//     try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.start);
+//     try std.testing.expectEqual(@as(u32, @intCast(source.len)), eof.loc.end);
+// }
 
 test "identifier" {
     try testLex("x", &.{.ident});
@@ -864,48 +983,48 @@ test "string literal" {
 
 test "integer literal" {
     // decimal
-    try testParseInt("0", &.{.int_lit}, &.{0});
-    try testParseInt("1", &.{.int_lit}, &.{1});
-    try testParseInt("123", &.{.int_lit}, &.{123});
-    try testParseInt("0123", &.{.int_lit}, &.{123});
-    try testParseInt("000123", &.{.int_lit}, &.{123});
-    try testParseInt("123456789", &.{.int_lit}, &.{123456789});
-    try testParseInt("123(", &.{ .int_lit, .l_paren }, &.{123});
-    try testParseInt("123;", &.{ .int_lit, .semi }, &.{123});
-    try testParseInt("123abc", &.{.invalid}, &.{});
-    try testParseInt("123_456", &.{.int_lit}, &.{123456});
-    try testParseInt("123_456_789", &.{.int_lit}, &.{123456789});
+    try testLex("0", &.{.int_lit});
+    try testLex("1", &.{.int_lit});
+    try testLex("123", &.{.int_lit});
+    try testLex("0123", &.{.int_lit});
+    try testLex("000123", &.{.int_lit});
+    try testLex("123456789", &.{.int_lit});
+    try testLex("123(", &.{ .int_lit, .l_paren });
+    try testLex("123;", &.{ .int_lit, .semi });
+    try testLex("123abc", &.{.invalid});
+    try testLex("123_456", &.{.int_lit});
+    try testLex("123_456_789", &.{.int_lit});
 
     // binary
-    try testParseInt("0b0", &.{.int_lit}, &.{0});
-    try testParseInt("0b1", &.{.int_lit}, &.{1});
-    try testParseInt("0b01", &.{.int_lit}, &.{1});
-    try testParseInt("0b0101011", &.{.int_lit}, &.{0b101011});
-    try testParseInt("0b1234", &.{.invalid}, &.{});
+    try testLex("0b0", &.{.int_lit});
+    try testLex("0b1", &.{.int_lit});
+    try testLex("0b01", &.{.int_lit});
+    try testLex("0b0101011", &.{.int_lit});
+    try testLex("0b1234", &.{.invalid});
 
     // octal
-    try testParseInt("0o0", &.{.int_lit}, &.{0});
-    try testParseInt("0o1", &.{.int_lit}, &.{1});
-    try testParseInt("0o01", &.{.int_lit}, &.{1});
-    try testParseInt("0o0123456", &.{.int_lit}, &.{0o123456});
-    try testParseInt("0o17", &.{.int_lit}, &.{0o17});
-    try testParseInt("0o178", &.{.invalid}, &.{});
-    try testParseInt("0o17abc", &.{.invalid}, &.{});
-    try testParseInt("0o12345_67", &.{.int_lit}, &.{0o1234567});
-    try testParseInt("0o12399", &.{.invalid}, &.{});
+    try testLex("0o0", &.{.int_lit});
+    try testLex("0o1", &.{.int_lit});
+    try testLex("0o01", &.{.int_lit});
+    try testLex("0o0123456", &.{.int_lit});
+    try testLex("0o17", &.{.int_lit});
+    try testLex("0o178", &.{.invalid});
+    try testLex("0o17abc", &.{.invalid});
+    try testLex("0o12345_67", &.{.int_lit});
+    try testLex("0o12399", &.{.invalid});
 
     // hex
-    try testParseInt("0x0", &.{.int_lit}, &.{0});
-    try testParseInt("0x1", &.{.int_lit}, &.{1});
-    try testParseInt("0x018ADFF", &.{.int_lit}, &.{0x18adff});
-    try testParseInt("0x0123456", &.{.int_lit}, &.{0x123456});
-    try testParseInt("0x789", &.{.int_lit}, &.{0x789});
-    try testParseInt("0x789A", &.{.int_lit}, &.{0x789a});
-    try testParseInt("0x789a", &.{.int_lit}, &.{0x789a});
-    try testParseInt("0xabcdef", &.{.int_lit}, &.{0xabcdef});
-    try testParseInt("0xABCDEF", &.{.int_lit}, &.{0xabcdef});
-    try testParseInt("0x123G", &.{.invalid}, &.{});
-    try testParseInt("0x12_3456_789_a_b_CDEF", &.{.int_lit}, &.{0x123456789abcdef});
+    try testLex("0x0", &.{.int_lit});
+    try testLex("0x1", &.{.int_lit});
+    try testLex("0x018ADFF", &.{.int_lit});
+    try testLex("0x0123456", &.{.int_lit});
+    try testLex("0x789", &.{.int_lit});
+    try testLex("0x789A", &.{.int_lit});
+    try testLex("0x789a", &.{.int_lit});
+    try testLex("0xabcdef", &.{.int_lit});
+    try testLex("0xABCDEF", &.{.int_lit});
+    try testLex("0x123G", &.{.invalid});
+    try testLex("0x12_3456_789_a_b_CDEF", &.{.int_lit});
 }
 
 test "float literal" {

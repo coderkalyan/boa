@@ -26,8 +26,8 @@ pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
 pub fn main() !void {
     var allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
     const gpa = allocator.allocator();
-    // var arena = std.heap.ArenaAllocator.init(gpa);
-    // defer arena.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
 
     var args = try std.process.argsWithAllocator(gpa);
     defer args.deinit();
@@ -36,11 +36,12 @@ pub fn main() !void {
     const filename = args.next();
 
     const source: [:0]const u8 = try readSource(gpa, filename.?);
-    var lexer = Lexer.init(source);
+    var lexer = try Lexer.init(source, arena.allocator());
 
     while (true) {
-        const token = lexer.next();
-        std.debug.print("{} ", .{token.tag});
+        const token = try lexer.next(arena.allocator());
+        std.debug.print("{s} ", .{@tagName(token.tag)});
         if (token.tag == .eof) break;
+        if (token.tag == .newline) std.debug.print("\n", .{});
     }
 }
