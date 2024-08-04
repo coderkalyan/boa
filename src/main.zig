@@ -1,7 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Lexer = @import("lex.zig").Lexer;
+const Ast = @import("Ast.zig");
+const parse = @import("parse.zig");
+const IrGen = @import("ir/IrGen.zig");
+const InternPool = @import("InternPool.zig");
 
+const Node = Ast.Node;
 const max_file_size = std.math.maxInt(u32);
 
 pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
@@ -36,12 +41,41 @@ pub fn main() !void {
     const filename = args.next();
 
     const source: [:0]const u8 = try readSource(gpa, filename.?);
-    var lexer = try Lexer.init(source, arena.allocator());
 
-    while (true) {
-        const token = try lexer.next(arena.allocator());
-        std.debug.print("{s} ", .{@tagName(token.tag)});
-        if (token.tag == .eof) break;
-        if (token.tag == .newline) std.debug.print("\n", .{});
+    // var lexer = try Lexer.init(source, arena.allocator());
+    // while (true) {
+    //     const token = try lexer.next(arena.allocator());
+    //     // std.debug.print("{s} '{s}'\n", .{ @tagName(token.tag), source[token.loc.start..token.loc.end] });
+    //     if (token.tag == .eof) break;
+    //     if (token.tag == .newline) std.debug.print("\n", .{});
+    // }
+
+    const tree = try parse.parse(gpa, source);
+    // for (tree.nodes.items(.data), tree.nodes.items(.main_token)) |data, tok| {
+    //     std.debug.print("{} {}\n", .{ data, tree.tokens.items(.tag)[tok] });
+    // }
+    var pool = try InternPool.init(gpa);
+
+    // post order format guarantees that the module node will be the last
+    const module_node: u32 = @intCast(tree.nodes.len - 1);
+    const module_slice = tree.extraData(tree.data(module_node).module.stmts, Node.ExtraSlice);
+    const module_stmts = tree.extraSlice(module_slice);
+    for (module_stmts) |stmt| {
+        if (@as(Node.Tag, tree.data(stmt)) == .function) {
+            const function = tree.data(stmt).function;
+
+            // ig.lowerFunction(stmt);
+            const ir = try IrGen.generate(gpa, &pool, &tree, function.body);
+            std.debug.print("hi {}\n", .{ir.insts.len});
+            for (ir.insts.items(.tag)) |tag| {
+                std.debug.print("{}\n", .{tag});
+            }
+        }
     }
+
+    // _ = ir;
+    // _ = ast;
+    // for (ast.nodes.items(.data), 0..) |data, i| {
+    //     std.debug.print("{}: {}\n", .{ i, data });
+    // }
 }
