@@ -36,7 +36,7 @@ pub fn parse(gpa: Allocator, source: [:0]const u8) Error!Ast {
     defer parser.deinit();
 
     _ = try parser.addNode(.{
-        .main_token = 0,
+        .main_token = .unused,
         .data = .{ .placeholder = {} },
     });
     _ = try parser.module();
@@ -105,7 +105,7 @@ const Parser = struct {
     // eats the current token (whatever it is) and returns the index
     fn eatCurrent(p: *Parser) TokenIndex {
         p.index += 1;
-        return p.index - 1;
+        return @enumFromInt(p.index - 1);
     }
 
     // eats the current token if it matches a tag, and returns null otherwise
@@ -304,7 +304,7 @@ const Parser = struct {
         const pl = try p.addSlice(stmts);
 
         return p.addNode(.{
-            .main_token = 0,
+            .main_token = .unused,
             .data = .{ .module = .{ .stmts = pl } },
         });
     }
@@ -430,7 +430,7 @@ const Parser = struct {
     }
 
     fn listLiteral(p: *Parser) !Node.Index {
-        const l_bracket_token = p.index;
+        const l_bracket_token: TokenIndex = @enumFromInt(p.index);
         const elements = try p.parseList(expression, .{ .open = .l_bracket, .close = .r_bracket });
         return p.addNode(.{
             .main_token = l_bracket_token,
@@ -696,7 +696,7 @@ const Parser = struct {
     }
 
     fn call(p: *Parser, ptr: Node.Index) !Node.Index {
-        const l_paren_token = p.index;
+        const l_paren_token: TokenIndex = @enumFromInt(p.index);
         const args = try p.parseList(expression, .{ .open = .l_paren, .close = .r_paren });
 
         return p.addNode(.{

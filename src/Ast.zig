@@ -6,7 +6,7 @@ const Lexer = lex.Lexer;
 const Token = lex.Token;
 pub const Ast = @This();
 
-pub const TokenIndex = u32;
+pub const TokenIndex = enum(u32) { unused, _ };
 pub const ByteOffset = u32;
 
 // represents the entire, immutable, AST of a source file, once parsed.
@@ -346,7 +346,7 @@ pub fn extraSlice(tree: *const Ast, sl: Ast.Node.ExtraSlice) []const u32 {
 }
 
 pub fn tokenString(tree: *const Ast, index: TokenIndex) []const u8 {
-    const loc = tree.tokens.items(.loc)[index];
+    const loc = tree.tokens.items(.loc)[@intFromEnum(index)];
     return tree.source[loc.start..loc.end];
 }
 
