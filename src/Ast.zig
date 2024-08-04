@@ -24,15 +24,7 @@ extra_data: []Node.Index,
 // token(s) in this array. note that tokens themselves don't own
 // any strings, but reference character offsets in the global
 // source array.
-pub const TokenList = std.MultiArrayList(struct {
-    tag: Token.Tag,
-    start: ByteOffset,
-    // even though the lexer generates end offsets, storing them
-    // is a low return on investment because we don't need them
-    // for most tokens (only identifiers, strings, and literals)
-    // therefore, we instead re-lex a single token to get the
-    // end offset/length as necessary
-});
+pub const TokenList = std.MultiArrayList(Token);
 
 // represents a node in the femto abstract syntax tree.
 // due to the u32::max cap on source file size, we can
@@ -123,10 +115,7 @@ pub const Node = struct {
         // unary postfix expressions
         // function call 'foo(1, 2, 3)'
         // main_token = function name
-        // args_start = start of argument array
-        // args_end = end of argument array
-        // TODO: this is very bad, increases union size
-        // move to extra data
+        // args: ExtraSlice containing argument array
         call: struct {
             ptr: Index,
             args: ExtraIndex,
@@ -177,18 +166,6 @@ pub const Node = struct {
         // main_token = '{'
         block: struct {
             stmts: ExtraIndex,
-        },
-
-        // attribute without arguments
-        // attr_simple,
-        // attribute with arguments
-        // range = argument indices
-        // attr_args: ExtraIndex,
-
-        // constant declaration with attribute(s) '@export let x[: ty] = ...';
-        const_decl_attr: struct {
-            metadata: ExtraIndex,
-            val: Index,
         },
 
         // variable assignment 'foo = "bar"'
@@ -283,6 +260,7 @@ pub const Node = struct {
 
     pub const Index = u32; // index into nodes array
     pub const ExtraIndex = u32; // index into extra_data array
+    pub const Tag = std.meta.Tag(Data);
 
     // represents a contigious range of nodes (subarray)
     pub const Range = struct {
@@ -368,12 +346,8 @@ pub fn extraSlice(tree: *const Ast, sl: Ast.Node.ExtraSlice) []const u32 {
 }
 
 pub fn tokenString(tree: *const Ast, index: TokenIndex) []const u8 {
-    const tokens = tree.tokens;
-    const token_start = tokens.items(.start)[index];
-    var lexer = Lexer.init_index(tree.source, token_start);
-    const token = lexer.next();
-
-    return tree.source[token.loc.start..token.loc.end];
+    const loc = tree.tokens.items(.loc)[index];
+    return tree.source[loc.start..loc.end];
 }
 
 pub fn tokenTag(tree: *const Ast, index: TokenIndex) Token.Tag {

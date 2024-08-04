@@ -27,11 +27,7 @@ pub fn parse(gpa: Allocator, source: [:0]const u8) Error!Ast {
     var lexer = try Lexer.init(source, arena.allocator());
     while (true) {
         const token = try lexer.next(arena.allocator());
-        try tokens.append(gpa, .{
-            .tag = token.tag,
-            .start = @intCast(token.loc.start),
-        });
-
+        try tokens.append(gpa, token);
         if (token.tag == .eof) break;
     }
 
@@ -45,6 +41,10 @@ pub fn parse(gpa: Allocator, source: [:0]const u8) Error!Ast {
     });
     _ = try parser.module();
 
+    // for (parser.nodes.items(.data), parser.nodes.items(.main_token)) |data, tok| {
+    //     std.debug.print("{} {}\n", .{ data, tokens.items(.tag)[tok] });
+    // }
+
     // copy parser results into an abstract syntax tree
     // that owns the source, token list, node list, and node extra data
     return Ast{
@@ -52,7 +52,6 @@ pub fn parse(gpa: Allocator, source: [:0]const u8) Error!Ast {
         .tokens = tokens.toOwnedSlice(),
         .nodes = parser.nodes.toOwnedSlice(),
         .extra_data = try parser.extra.toOwnedSlice(gpa),
-        // .errors = try parser.errors.toOwnedSlice(),
     };
 }
 
@@ -61,27 +60,23 @@ const Parser = struct {
     source: []const u8,
 
     token_tags: []const Token.Tag,
-    token_starts: []const u32,
     index: u32,
 
     nodes: std.MultiArrayList(Node),
     extra: std.ArrayListUnmanaged(Node.Index),
     scratch: std.ArrayList(Node.Index),
     attributes: std.ArrayListUnmanaged(Node.Index),
-    // errors: std.ArrayList(error_handler.SourceError),
 
     pub fn init(gpa: Allocator, source: []const u8, tokens: *Ast.TokenList) Parser {
         return .{
             .source = source,
             .gpa = gpa,
             .token_tags = tokens.items(.tag),
-            .token_starts = tokens.items(.start),
             .index = 0,
             .nodes = .{},
             .extra = .{},
             .scratch = std.ArrayList(Node.Index).init(gpa),
             .attributes = .{},
-            // .errors = std.ArrayList(error_handler.SourceError).init(gpa),
         };
     }
 
