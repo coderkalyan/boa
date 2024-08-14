@@ -222,7 +222,7 @@ pub fn put(pool: *InternPool, key: Key) !Index {
     return @enumFromInt(pool.items.len - 1);
 }
 
-pub fn get(pool: *InternPool, _index: Index) Key {
+pub fn get(pool: *const InternPool, _index: Index) Key {
     const index: u64 = @intFromEnum(_index);
     std.debug.assert(index < pool.items.len);
 
@@ -255,9 +255,28 @@ fn putString(pool: *InternPool, str: []const u8) !Item {
     return .{ .tag = .str, .payload = .{ .str = index } };
 }
 
-fn getString(pool: *InternPool, item: Item) []const u8 {
+fn getString(pool: *const InternPool, item: Item) []const u8 {
     const offset: u32 = @intFromEnum(item.payload.str);
     return std.mem.span(@as([*:0]const u8, @ptrCast(pool.bytes.items.ptr)) + offset);
+}
+
+pub fn print(pool: *const InternPool, writer: anytype, ip: Index) !void {
+    const key = pool.get(ip);
+    switch (key) {
+        .ty => |ty| switch (ty) {
+            inline else => try writer.print("{s}", .{@tagName(ty)}),
+        },
+        .tv => |tv| {
+            try pool.print(writer, tv.ty);
+            try writer.print("(", .{});
+            switch (tv.val) {
+                .none => try writer.print("none", .{}),
+                inline .int, .float, .bool => |val| try writer.print("{}", .{val}),
+            }
+            try writer.print(")", .{});
+        },
+        .str => |str| try writer.print("\"{s}\"", .{str}),
+    }
 }
 
 fn testRoundtrip(pool: *InternPool, key: Key) !void {

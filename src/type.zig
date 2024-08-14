@@ -28,7 +28,7 @@ pub const Type = union(enum) {
 
     // converts an InternPool.Item back into a Type. It is invalid
     // to call this function on an Item that is not a Type.
-    pub fn deserialize(item: Item, pool: *InternPool) Type {
+    pub fn deserialize(item: Item, pool: *const InternPool) Type {
         _ = pool;
 
         return switch (item.tag) {

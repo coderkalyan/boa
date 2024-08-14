@@ -5,6 +5,7 @@ const Ast = @import("Ast.zig");
 const parse = @import("parse.zig");
 const IrGen = @import("ir/IrGen.zig");
 const InternPool = @import("InternPool.zig");
+const render = @import("render.zig");
 
 const Node = Ast.Node;
 const max_file_size = std.math.maxInt(u32);
@@ -42,6 +43,10 @@ pub fn main() !void {
 
     const source: [:0]const u8 = try readSource(gpa, filename.?);
 
+    const out = std.io.getStdOut();
+    var buffered_out = std.io.bufferedWriter(out.writer());
+    const writer = buffered_out.writer();
+
     // var lexer = try Lexer.init(source, arena.allocator());
     // while (true) {
     //     const token = try lexer.next(arena.allocator());
@@ -66,10 +71,16 @@ pub fn main() !void {
 
             // ig.lowerFunction(stmt);
             const ir = try IrGen.generate(gpa, &pool, &tree, function.body);
-            std.debug.print("hi {}\n", .{ir.insts.len});
-            for (ir.insts.items(.tag)) |tag| {
-                std.debug.print("{}\n", .{tag});
-            }
+            const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+            var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
+            // if (false) {
+            try renderer.render();
+            try buffered_out.flush();
+            // }
+            // std.debug.print("hi {}\n", .{ir.insts.len});
+            // for (ir.insts.items(.tag)) |tag| {
+            //     std.debug.print("{}\n", .{tag});
+            // }
         }
     }
 

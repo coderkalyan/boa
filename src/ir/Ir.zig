@@ -7,6 +7,7 @@ pool: *InternPool,
 tree: *const Ast,
 insts: List.Slice,
 extra: []const u32,
+block: ExtraIndex,
 
 pub const Ir = @This();
 pub const List = std.MultiArrayList(Inst);
@@ -32,40 +33,55 @@ pub const Inst = struct {
         // nconst,
         constant,
 
+        // int to float
+        // .unary
+        itof,
+        // float to int
+        // .unary
+        ftoi,
         // unary addition
         // .unary
-        pos,
+        // TODO: check if this is needed
+        // pos,
+
         // negation (unary subtraction)
         // .unary
-        neg,
+        ineg,
+        fneg,
         // bitwise invert
         // .unary
         binv,
         // boolean invert
         // .unary
-        not,
+        lnot,
 
         // addition
         // .binary
-        add,
+        iadd,
+        fadd,
         // subtraction
         // .binary
-        sub,
+        isub,
+        fsub,
         // multiplication
         // .binary
-        mul,
+        imul,
+        fmul,
         // division
         // .binary
-        div,
+        idiv,
+        fdiv,
         // modulo
         // .binary
-        mod,
+        imod,
+        fmod,
         // raise to power
         // .binary
-        pow,
+        ipow,
+        fpow,
         // matrix multiplication
         // .binary
-        matmul,
+        // matmul,
         // bitwise or
         // .binary
         bor,
@@ -74,7 +90,7 @@ pub const Inst = struct {
         band,
         // bitwise xor
         // .binary
-        xor,
+        bxor,
         // boolean or
         // .binary
         lor,
@@ -83,25 +99,50 @@ pub const Inst = struct {
         land,
         // equal
         // .binary
-        eq,
+        ieq,
+        feq,
+        beq,
         // not equal
         // .binary
-        ne,
+        ine,
+        fne,
+        bne,
         // less than
         // .binary
-        lt,
+        ilt,
+        flt,
+        blt,
         // greater than
         // .binary
-        gt,
+        igt,
+        fgt,
+        bgt,
         // less than equal
         // .binary
-        le,
+        ile,
+        fle,
+        ble,
         // greater than equal
         // .binary
-        ge,
+        ige,
+        fge,
+        bge,
 
         // return a value
         ret,
+
+        // allocate a stack slot for a variable
+        // .ip = type of variable
+        alloc,
+        // load a value from a stack slot
+        // .unary = alloc inst
+        load,
+        // store a value in a stack slot
+        // .binary = alloc inst and operand to store
+        store,
+        // free a previously allocated stack slot
+        // .unary = alloc inst
+        dealloc,
     };
 
     pub const Payload = union {
@@ -121,6 +162,15 @@ pub const Inst = struct {
                 std.debug.assert(@sizeOf(Payload) <= 8);
             }
         }
+
+        // we can't use std.meta.Tag since the union isn't tagged, but
+        // this is used for comptime meta programming
+        const Tag = enum {
+            placeholder,
+            ip,
+            unary,
+            binary,
+        };
     };
 
     pub const ExtraSlice = struct {
@@ -145,4 +195,96 @@ pub fn extraSlice(ir: *const Ir, slice: Inst.ExtraSlice) []const u32 {
     const start: u32 = @intFromEnum(slice.start);
     const end: u32 = @intFromEnum(slice.end);
     return ir.extra[start..end];
+}
+
+pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
+    const index = @intFromEnum(inst);
+    const tag = ir.insts.items(.tag)[index];
+    const payload = ir.insts.items(.payload)[index];
+
+    return switch (tag) {
+        .constant => ir.pool.get(payload.ip).tv.ty,
+        .itof => .float,
+        .ftoi => .int,
+        .ineg => .int,
+        .fneg => .float,
+        .binv => .int,
+        .lnot => .bool,
+        .iadd => .int,
+        .fadd => .float,
+        .isub => .int,
+        .fsub => .float,
+        .imul => .int,
+        .fmul => .float,
+        .idiv => .int,
+        .fdiv => .float,
+        .imod => .int,
+        .fmod => .float,
+        .ipow => .int,
+        .fpow => .float,
+        .bor, .band, .bxor => .int,
+        .lor, .land => .bool,
+        .ieq, .feq, .beq, .ine, .fne, .bne => .bool,
+        .ilt, .flt, .blt, .igt, .fgt, .bgt => .bool,
+        .ile, .fle, .ble, .ige, .fge, .bge => .bool,
+        .ret => ir.typeOf(payload.unary),
+        .alloc => unreachable,
+        .load => ir.insts.items(.payload)[@intFromEnum(payload.unary)].ip,
+        .store => ir.typeOf(payload.binary.r),
+        .dealloc => unreachable,
+    };
+}
+
+pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
+    return switch (tag) {
+        .constant => .ip,
+        .itof,
+        .ftoi,
+        .ineg,
+        .fneg,
+        .binv,
+        .lnot,
+        => .unary,
+        .iadd,
+        .fadd,
+        .isub,
+        .fsub,
+        .idiv,
+        .fdiv,
+        .imul,
+        .fmul,
+        .imod,
+        .fmod,
+        .ipow,
+        .fpow,
+        .bor,
+        .band,
+        .bxor,
+        .lor,
+        .land,
+        .ieq,
+        .feq,
+        .beq,
+        .ine,
+        .fne,
+        .bne,
+        .ilt,
+        .flt,
+        .blt,
+        .igt,
+        .fgt,
+        .bgt,
+        .ile,
+        .fle,
+        .ble,
+        .ige,
+        .fge,
+        .bge,
+        => .binary,
+        .ret => .unary,
+        .alloc => .ip,
+        .load => .unary,
+        .store => .binary,
+        .dealloc => .unary,
+    };
 }

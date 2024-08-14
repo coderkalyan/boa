@@ -37,7 +37,7 @@ pub const TypedValue = struct {
                 const wide_top: u32 = @intCast(pool.wide.items.len);
                 try pool.wide.append(pool.gpa, @bitCast(float));
 
-                return .{ .tag = .int_tv, .payload = .{ .wide = @enumFromInt(wide_top) } };
+                return .{ .tag = .float_tv, .payload = .{ .wide = @enumFromInt(wide_top) } };
             },
             .bool => |b| .{ .tag = .bool_tv, .payload = .{ .bool = b } },
         };
@@ -45,7 +45,7 @@ pub const TypedValue = struct {
 
     // converts an InternPool.Item back into a TypedValue. It is invalid
     // to call this function on an Item that is not a TypedValue.
-    pub fn deserialize(item: Item, pool: *InternPool) TypedValue {
+    pub fn deserialize(item: Item, pool: *const InternPool) TypedValue {
         const tag = item.tag;
         const payload = item.payload;
 
