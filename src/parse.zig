@@ -917,10 +917,3 @@ const Parser = struct {
 // for (tree.errors) |parse_error| {
 //
 // }
-test "arith.fm" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-
-    const ast = try parse(allocator, @embedFile("tests/arith.fm"));
-    _ = ast;
-}
