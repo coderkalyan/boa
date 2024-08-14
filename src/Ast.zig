@@ -351,7 +351,7 @@ pub fn tokenString(tree: *const Ast, index: TokenIndex) []const u8 {
 }
 
 pub fn tokenTag(tree: *const Ast, index: TokenIndex) Token.Tag {
-    return tree.tokens.items(.tag)[index];
+    return tree.tokens.items(.tag)[@intFromEnum(index)];
 }
 
 pub fn mainToken(tree: *const Ast, node: Node.Index) TokenIndex {
