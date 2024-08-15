@@ -4,6 +4,7 @@ const Lexer = @import("lex.zig").Lexer;
 const Ast = @import("Ast.zig");
 const parse = @import("parse.zig");
 const IrGen = @import("ir/IrGen.zig");
+const Assembler = @import("bc/Assembler.zig");
 const InternPool = @import("InternPool.zig");
 const render = @import("render.zig");
 
@@ -71,11 +72,25 @@ pub fn main() !void {
 
             // ig.lowerFunction(stmt);
             const ir = try IrGen.generate(gpa, &pool, &tree, function.body);
-            const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-            var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
-            // if (false) {
-            try renderer.render();
-            try buffered_out.flush();
+            {
+                const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+                var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
+                try renderer.render();
+                try buffered_out.flush();
+            }
+
+            try writer.print("\n", .{});
+
+            const bytecode = try Assembler.assemble(gpa, &pool, &ir);
+            {
+                const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+                var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
+                try renderer.render();
+                try buffered_out.flush();
+            }
+            // for (bytecode.code) |byte| {
+            //     std.debug.print("{d} ", .{byte});
+            // }
             // }
             // std.debug.print("hi {}\n", .{ir.insts.len});
             // for (ir.insts.items(.tag)) |tag| {

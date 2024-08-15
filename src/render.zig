@@ -2,6 +2,7 @@ const std = @import("std");
 const Ast = @import("Ast.zig");
 const lex = @import("lex.zig");
 const Ir = @import("ir/Ir.zig");
+const Bytecode = @import("bc/Bytecode.zig");
 const InternPool = @import("InternPool.zig");
 const Type = @import("type.zig").Type;
 const Allocator = std.mem.Allocator;
@@ -9,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const io = std.io;
 
 const Node = Ast.Node;
+const Opcode = Bytecode.Opcode;
 
 pub fn AstRenderer(comptime width: u32, comptime WriterType: anytype) type {
     return struct {
@@ -329,6 +331,117 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     try writer.print(")", .{});
                     try self.stream.newline();
                 },
+            }
+        }
+    };
+}
+
+pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type {
+    return struct {
+        stream: IndentingWriter(width, WriterType),
+        bc: *const Bytecode,
+        arena: Allocator,
+
+        pub const Self = @This();
+
+        pub fn init(writer: anytype, arena: Allocator, bc: *const Bytecode) Self {
+            return .{
+                .stream = indentingWriter(width, writer),
+                .arena = arena,
+                .bc = bc,
+            };
+        }
+
+        pub fn render(self: *Self) !void {
+            var ptr: usize = 0;
+            while (ptr < self.bc.code.len) {
+                ptr += try self.renderInst(ptr);
+            }
+        }
+
+        fn renderInst(self: *Self, start: usize) !usize {
+            const code = self.bc.code;
+            const writer = self.stream.writer();
+            var ptr = start;
+
+            // read initial bytecode (either operand or width prefix)
+            var tag: Opcode = @enumFromInt(code[ptr]);
+            ptr += 1;
+
+            // if it's a width prefix, set the number of operand bytes to read
+            var op_width: usize = 1;
+            switch (tag) {
+                .wide => {
+                    tag = @enumFromInt(code[ptr]);
+                    ptr += 1;
+                    op_width = 2;
+                },
+                .dwide => {
+                    tag = @enumFromInt(code[ptr]);
+                    ptr += 1;
+                    op_width = 4;
+                },
+                .qwide => {
+                    tag = @enumFromInt(code[ptr]);
+                    ptr += 1;
+                    op_width = 8;
+                },
+                else => {},
+            }
+
+            for (start..start + 10) |i| {
+                if (i < (ptr + op_width)) {
+                    try writer.print("{x:0>2} ", .{code[i]});
+                } else {
+                    try writer.print("   ", .{});
+                }
+            }
+
+            try writer.print(": {s} ", .{@tagName(tag)});
+            switch (tag) {
+                .wide, .dwide, .qwide => unreachable,
+                .ld => {
+                    const imm = self.readOperand(ptr, op_width);
+                    try writer.print("0x{x:0>16} ({}) ", .{ imm, @as(f64, @bitCast(imm)) });
+                },
+                .ineg,
+                .fneg,
+                .binv,
+                .lnot,
+                => op_width = 0,
+                else => {
+                    const register = self.readOperand(ptr, op_width);
+                    try writer.print("r{} ", .{register});
+                },
+            }
+
+            ptr += op_width;
+            try writer.print("\n", .{});
+
+            return ptr;
+        }
+
+        fn readOperand(self: *Self, start: usize, op_width: usize) u64 {
+            const code = self.bc.code;
+
+            switch (op_width) {
+                1 => return code[start],
+                2 => {
+                    var op: u16 = undefined;
+                    @memcpy(std.mem.asBytes(&op), code[start .. start + 2]);
+                    return op;
+                },
+                4 => {
+                    var op: u32 = undefined;
+                    @memcpy(std.mem.asBytes(&op), code[start .. start + 4]);
+                    return op;
+                },
+                8 => {
+                    var op: u64 = undefined;
+                    @memcpy(std.mem.asBytes(&op), code[start .. start + 8]);
+                    return op;
+                },
+                else => unreachable,
             }
         }
     };

@@ -19,18 +19,8 @@ pub const Inst = struct {
     payload: Payload,
 
     pub const Tag = enum(u8) {
-        // (u64) integer constant
-        // .int
-        // iconst,
-        // float constant
-        // .float
-        // fconst,
-        // boolean constant
-        // .bool
-        // bconst,
-        // None constant
-        // .none
-        // nconst,
+        // constant (immediate)
+        // .ip
         constant,
 
         // int to float
@@ -287,4 +277,9 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .store => .binary,
         .dealloc => .unary,
     };
+}
+
+pub fn instPayload(ir: *const Ir, inst: Index) Inst.Payload {
+    const index = @intFromEnum(inst);
+    return ir.insts.items(.payload)[index];
 }
