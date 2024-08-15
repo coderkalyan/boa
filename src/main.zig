@@ -88,20 +88,6 @@ pub fn main() !void {
                 try renderer.render();
                 try buffered_out.flush();
             }
-            // for (bytecode.code) |byte| {
-            //     std.debug.print("{d} ", .{byte});
-            // }
-            // }
-            // std.debug.print("hi {}\n", .{ir.insts.len});
-            // for (ir.insts.items(.tag)) |tag| {
-            //     std.debug.print("{}\n", .{tag});
-            // }
         }
     }
-
-    // _ = ir;
-    // _ = ast;
-    // for (ast.nodes.items(.data), 0..) |data, i| {
-    //     std.debug.print("{}: {}\n", .{ i, data });
-    // }
 }

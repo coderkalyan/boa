@@ -355,7 +355,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
         pub fn render(self: *Self) !void {
             var ptr: usize = 0;
             while (ptr < self.bc.code.len) {
-                ptr += try self.renderInst(ptr);
+                ptr = try self.renderInst(ptr);
             }
         }
 

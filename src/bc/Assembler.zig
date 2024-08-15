@@ -11,15 +11,15 @@ const Inst = Ir.Inst;
 const Assembler = @This();
 
 gpa: Allocator,
+arena: Allocator,
 pool: *InternPool,
 ir: *const Ir,
 code: std.ArrayListUnmanaged(u8),
-
-// fn add(self: *Assembler, inst: Inst) !void {
-//     switch (inst) {
-//
-//     }
-// }
+locals: struct {
+    reserved: u32,
+    used: u32,
+    map: std.AutoHashMapUnmanaged(Ir.Index, u32),
+},
 
 fn addImplicit(self: *Assembler, opcode: Opcode) !void {
     try self.code.append(self.gpa, @intFromEnum(opcode));
@@ -86,15 +86,45 @@ fn addImmediate(self: *Assembler, opcode: Opcode, ty: type, imm: ty) !void {
 }
 
 pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
-    var assembler: Assembler = .{
-        .gpa = gpa,
-        .pool = pool,
-        .ir = ir,
-        .code = .{},
-    };
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
 
     const block = ir.extraData(Inst.ExtraSlice, ir.block);
     const insts = ir.extraSlice(block);
+
+    // figure out how many "fixed" registers we need to allocate
+    // for locals
+    var max: u32 = 0;
+    var used: u32 = 0;
+    for (insts) |inst| {
+        switch (ir.insts.items(.tag)[inst]) {
+            .alloc => {
+                used += 1;
+                max = @max(max, used);
+            },
+            .dealloc => used -= 1,
+            else => {},
+        }
+    }
+
+    var assembler: Assembler = .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .pool = pool,
+        .ir = ir,
+        .code = .{},
+        .locals = .{
+            .reserved = max,
+            .used = 0,
+            .map = .{},
+        },
+    };
+
+    // we know how many locals we'll have at any time, so
+    // reserve space ahead of time
+    try assembler.locals.map.ensureUnusedCapacity(assembler.arena, assembler.locals.reserved);
+
+    // now generate the code
     for (insts) |inst| {
         try assembler.generate(@enumFromInt(inst));
     }
@@ -109,9 +139,11 @@ fn generate(self: *Assembler, inst: Ir.Index) !void {
     const ir = self.ir;
 
     const index = @intFromEnum(inst);
-    // const payload = ir.insts.items(.payload)[index];
     switch (ir.insts.items(.tag)[index]) {
         .constant => try self.constant(inst),
+        .alloc => try self.alloc(inst),
+        .load => try self.load(inst),
+        .store => try self.store(inst),
         else => {},
     }
 }
@@ -126,4 +158,27 @@ fn constant(self: *Assembler, inst: Ir.Index) !void {
         .bool => try self.addImmediate(.ld, bool, tv.val.bool),
         else => {},
     }
+}
+
+fn alloc(self: *Assembler, inst: Ir.Index) !void {
+    self.locals.map.putAssumeCapacity(inst, self.locals.used);
+    self.locals.used += 1;
+}
+
+fn dealloc(self: *Assembler, inst: Ir.Index) !void {
+    const unary = self.ir.instPayload(inst).unary;
+    self.locals.map.remove(unary);
+    self.locals.used -= 1;
+}
+
+fn load(self: *Assembler, inst: Ir.Index) !void {
+    const unary = self.ir.instPayload(inst).unary;
+    const src = self.locals.map.get(unary).?;
+    try self.addOperand(.ldr, src);
+}
+
+fn store(self: *Assembler, inst: Ir.Index) !void {
+    const binary = self.ir.instPayload(inst).binary;
+    const dest = self.locals.map.get(binary.l).?;
+    try self.addOperand(.str, dest);
 }
