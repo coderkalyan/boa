@@ -15,11 +15,64 @@ arena: Allocator,
 pool: *InternPool,
 ir: *const Ir,
 code: std.ArrayListUnmanaged(u8),
-locals: struct {
-    reserved: u32,
-    used: u32,
-    map: std.AutoHashMapUnmanaged(Ir.Index, u32),
-},
+ra: RegisterAllocator,
+
+const RegisterAllocator = struct {
+    locals: []Local,
+    temporaries: u32,
+    max_temporaries: u32,
+
+    const Local = struct {
+        inst: Ir.Index,
+        used: bool,
+    };
+
+    pub fn init(arena: Allocator, reserved: u32) !RegisterAllocator {
+        const ra: RegisterAllocator = .{
+            .locals = try arena.alloc(Local, reserved),
+            .temporaries = 0,
+            .max_temporaries = 0,
+        };
+
+        for (ra.locals) |*local| local.used = false;
+        return ra;
+    }
+
+    pub fn allocLocal(ra: *const RegisterAllocator, inst: Ir.Index) void {
+        for (ra.locals) |*local| {
+            if (!local.used) {
+                local.used = true;
+                local.inst = inst;
+                break;
+            }
+        }
+    }
+
+    pub fn getLocal(ra: *const RegisterAllocator, inst: Ir.Index) u32 {
+        for (ra.locals, 0..) |local, i| {
+            if (local.used and local.inst == inst) return @intCast(i);
+        }
+
+        unreachable;
+    }
+
+    pub fn freeLocal(ra: *const RegisterAllocator, inst: Ir.Index) void {
+        // this works because both local registers and the locals slice
+        // are zero indexed
+        const index = ra.getLocal(inst);
+        ra.locals[index].used = false;
+    }
+
+    pub fn allocTemporary(ra: *RegisterAllocator) u32 {
+        ra.temporaries += 1;
+        ra.max_temporaries = @max(ra.max_temporaries, ra.temporaries);
+        return ra.max_locals + ra.temporaries - 1;
+    }
+
+    pub fn freeTemporary(ra: *RegisterAllocator) void {
+        ra.temporaries -= 1;
+    }
+};
 
 fn addImplicit(self: *Assembler, opcode: Opcode) !void {
     try self.code.append(self.gpa, @intFromEnum(opcode));
@@ -113,16 +166,12 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .pool = pool,
         .ir = ir,
         .code = .{},
-        .locals = .{
-            .reserved = max,
-            .used = 0,
-            .map = .{},
-        },
+        .ra = try RegisterAllocator.init(arena.allocator(), max),
     };
 
     // we know how many locals we'll have at any time, so
     // reserve space ahead of time
-    try assembler.locals.map.ensureUnusedCapacity(assembler.arena, assembler.locals.reserved);
+    // try assembler.map.ensureUnusedCapacity(assembler.arena, assembler.locals.reserved);
 
     // now generate the code
     for (insts) |inst| {
@@ -158,27 +207,30 @@ fn constant(self: *Assembler, inst: Ir.Index) !void {
         .bool => try self.addImmediate(.ld, bool, tv.val.bool),
         else => {},
     }
+
+    const reg = self.ra.allocTemporary();
+    try self.addOperand(.str, reg);
 }
 
 fn alloc(self: *Assembler, inst: Ir.Index) !void {
-    self.locals.map.putAssumeCapacity(inst, self.locals.used);
-    self.locals.used += 1;
+    self.ra.allocLocal(inst);
 }
 
 fn dealloc(self: *Assembler, inst: Ir.Index) !void {
     const unary = self.ir.instPayload(inst).unary;
-    self.locals.map.remove(unary);
-    self.locals.used -= 1;
+    self.ra.freeLocal(unary);
 }
 
 fn load(self: *Assembler, inst: Ir.Index) !void {
     const unary = self.ir.instPayload(inst).unary;
-    const src = self.locals.map.get(unary).?;
+    const src = self.ra.getLocal(unary);
     try self.addOperand(.ldr, src);
+    const dest = self.ra.allocTemporary();
+    try self.addOperand(.str, dest);
 }
 
 fn store(self: *Assembler, inst: Ir.Index) !void {
     const binary = self.ir.instPayload(inst).binary;
-    const dest = self.locals.map.get(binary.l).?;
+    const dest = self.ra.getLocal(binary.l);
     try self.addOperand(.str, dest);
 }
