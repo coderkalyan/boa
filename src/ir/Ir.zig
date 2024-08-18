@@ -2,12 +2,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 const InternPool = @import("../InternPool.zig");
 const Ast = @import("../Ast.zig");
+const Liveness = @import("Liveness.zig");
 
 pool: *InternPool,
 tree: *const Ast,
 insts: List.Slice,
 extra: []const u32,
 block: ExtraIndex,
+liveness: Liveness,
 
 pub const Ir = @This();
 pub const List = std.MultiArrayList(Inst);
@@ -279,7 +281,12 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
     };
 }
 
-pub fn instPayload(ir: *const Ir, inst: Index) Inst.Payload {
+pub inline fn instTag(ir: *const Ir, inst: Index) Inst.Tag {
+    const index = @intFromEnum(inst);
+    return ir.insts.items(.tag)[index];
+}
+
+pub inline fn instPayload(ir: *const Ir, inst: Index) Inst.Payload {
     const index = @intFromEnum(inst);
     return ir.insts.items(.payload)[index];
 }

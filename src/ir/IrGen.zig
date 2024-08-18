@@ -3,6 +3,7 @@ const InternPool = @import("../InternPool.zig");
 const Ast = @import("../Ast.zig");
 const Ir = @import("Ir.zig");
 const Scope = @import("Scope.zig");
+const Liveness = @import("Liveness.zig");
 
 const Allocator = std.mem.Allocator;
 const Node = Ast.Node;
@@ -119,6 +120,7 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     //     }
     // }
     // for (module)
+    const liveness = try Liveness.analyze(gpa, &ig.getTempIr());
 
     return .{
         .pool = pool,
@@ -126,6 +128,7 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
         .insts = ig.insts.toOwnedSlice(),
         .extra = try ig.extra.toOwnedSlice(gpa),
         .block = block_index,
+        .liveness = liveness,
     };
 }
 
@@ -486,6 +489,7 @@ fn getTempIr(ig: *const IrGen) Ir {
         .insts = ig.insts.slice(),
         .extra = ig.extra.items,
         .block = undefined,
+        .liveness = undefined,
     };
 }
 

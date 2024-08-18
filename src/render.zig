@@ -254,77 +254,33 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
             const ir = self.ir;
             const index = @intFromEnum(inst);
             const writer = self.stream.writer();
-            try writer.print("%{} = ", .{index});
+            const dead_bits = ir.liveness.deadBits(inst);
+
+            if (dead_bits & 0x8 != 0) {
+                try writer.print("!%{} = ", .{index});
+            } else {
+                try writer.print("%{} = ", .{index});
+            }
 
             const tag = ir.insts.items(.tag)[index];
             const payload = ir.insts.items(.payload)[index];
             switch (tag) {
-                // .block => {
-                //     try writer.print("block {{", .{});
-                //     self.stream.indent();
-                //     try self.stream.newline();
-                //
-                //     const slice = ir.extraData(Ir.Inst.ExtraSlice, block.insts);
-                //     const insts = ir.extraSlice(slice);
-                //     for (insts) |block_inst| {
-                //         try self.renderInst(@enumFromInt(block_inst));
-                //     }
-                //
-                //     self.stream.dedent();
-                //     try writer.print("}}", .{});
-                //     try self.stream.newline();
-                // },
-                // .branch_single => |branch_single| {
-                //     const cond = @intFromEnum(branch_single.cond);
-                //     try writer.print("branch_single(%{}) true: ", .{cond});
-                //     try self.renderInst(branch_single.exec_true);
-                // },
-                // .branch_double => |data| {
-                //     const cond = @intFromEnum(data.cond);
-                //     const branch_double = ir.extraData(Ir.Inst.BranchDouble, data.pl);
-                //     try writer.print("branch_double(%{}) {{", .{cond});
-                //     self.stream.indent();
-                //     try self.stream.newline();
-                //     try writer.print("true: ", .{});
-                //     try self.renderInst(branch_double.exec_true);
-                //     try writer.print("false: ", .{});
-                //     try self.renderInst(branch_double.exec_false);
-                //     self.stream.dedent();
-                //     try writer.print("}}", .{});
-                //     try self.stream.newline();
-                // },
-                // .loop_while => |loop| {
-                //     try writer.print("loop_while {{", .{});
-                //     self.stream.indent();
-                //     try self.stream.newline();
-                //     try writer.print("condition: ", .{});
-                //     try self.renderInst(loop.cond);
-                //     try writer.print("body: ", .{});
-                //     try self.renderInst(loop.body);
-                //     self.stream.dedent();
-                //     try writer.print("}}", .{});
-                //     try self.stream.newline();
-                // },
-                // .call => |call| {
-                //     try writer.print("call(%{}", .{@intFromEnum(call.function)});
-                //     const slice = ir.extraData(Ir.Inst.ExtraSlice, call.args);
-                //     const args = ir.extraSlice(slice);
-                //     for (args) |arg| {
-                //         try writer.print(", %{}", .{arg});
-                //     }
-                //     try writer.print(")", .{});
-                //     try self.stream.newline();
-                // },
                 inline else => {
                     try writer.print("{s}(", .{@tagName(tag)});
 
                     switch (Ir.payloadTag(tag)) {
                         .placeholder => {},
-                        .unary => try writer.print("%{}", .{@intFromEnum(payload.unary)}),
+                        .unary => if (dead_bits & 0x1 != 0) {
+                            try writer.print("!%{}", .{@intFromEnum(payload.unary)});
+                        } else {
+                            try writer.print("%{}", .{@intFromEnum(payload.unary)});
+                        },
                         .binary => {
                             const l = @intFromEnum(payload.binary.l);
+                            const dead_l = if (dead_bits & 0x1 != 0) "!" else "";
                             const r = @intFromEnum(payload.binary.r);
-                            try writer.print("%{}, %{}", .{ l, r });
+                            const dead_r = if (dead_bits & 0x2 != 0) "!" else "";
+                            try writer.print("{s}%{}, {s}%{}", .{ dead_l, l, dead_r, r });
                         },
                         .ip => try ir.pool.print(writer, payload.ip),
                     }
