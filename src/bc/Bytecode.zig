@@ -14,20 +14,26 @@ pub const Opcode = enum(u8) {
     wide, // 16 bit operand
     dwide, // 32 bit operand
 
-    // load an immediate into accumulator
-    // operand: immediate
+    // load an immediate into register
+    // op1: register
+    // op2: immediate
     ld,
 
-    // load indirect into accumulator
-    // operand: intern pool index
+    // load indirect into register
+    // op1: register
+    // op2: intern pool index
     ldi,
 
+    // move from register to register
+    // op1: dest register
+    // op2: src register
+    mov,
     // load from register into accumulator
     // operand: register
-    ldr,
+    // ldr,
     // store from accumulator into register
     // operand: register
-    str,
+    // str,
 
     // integer negation of accumulator
     // no operand

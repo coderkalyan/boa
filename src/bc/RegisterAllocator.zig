@@ -62,9 +62,11 @@ pub fn dealloc(ra: *RegisterAllocator, inst: Ir.Index) u32 {
     ra.slots[index].live = false;
 }
 
-pub inline fn push(ra: *RegisterAllocator) void {
+pub inline fn push(ra: *RegisterAllocator) u32 {
     ra.tlive += 1;
     ra.tmax = @max(ra.tmax, ra.tlive);
+    const vmax: u32 = @intCast(ra.locals.len);
+    return vmax + ra.tlive - 1;
 }
 
 pub inline fn pop(ra: *RegisterAllocator) void {
@@ -78,17 +80,17 @@ pub inline fn pop(ra: *RegisterAllocator) void {
 // pub fn use(ra: *RegisterAllocator) void {
 //
 // }
-pub inline fn current(ra: *const RegisterAllocator) u32 {
-    std.debug.assert(ra.tlive >= 1);
-    const vmax: u32 = @intCast(ra.locals.len);
-    return vmax + ra.tlive - 1;
-}
-
-pub inline fn skip(ra: *const RegisterAllocator) u32 {
-    std.debug.assert(ra.tlive >= 2);
-    const vmax: u32 = @intCast(ra.locals.len);
-    return vmax + ra.tlive - 2;
-}
+// pub inline fn current(ra: *const RegisterAllocator) u32 {
+//     std.debug.assert(ra.tlive >= 1);
+//     const vmax: u32 = @intCast(ra.locals.len);
+//     return vmax + ra.tlive - 1;
+// }
+//
+// pub inline fn skip(ra: *const RegisterAllocator) u32 {
+//     std.debug.assert(ra.tlive >= 2);
+//     const vmax: u32 = @intCast(ra.locals.len);
+//     return vmax + ra.tlive - 2;
+// }
 
 pub inline fn final(ra: *RegisterAllocator) u32 {
     const vmax: u32 = @intCast(ra.locals.len);
