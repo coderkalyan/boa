@@ -13,11 +13,14 @@ pub const Opcode = enum(u8) {
     // emitted automatically by the bytecode assembler (not managed manually)
     wide, // 16 bit operand
     dwide, // 32 bit operand
-    qwide, // 64 bit operand
 
     // load an immediate into accumulator
     // operand: immediate
     ld,
+
+    // load indirect into accumulator
+    // operand: intern pool index
+    ldi,
 
     // load from register into accumulator
     // operand: register
@@ -116,39 +119,3 @@ pub const Opcode = enum(u8) {
     ige,
     fge,
 };
-
-// pub const Inst = union(enum) {
-//     ld: Operand,
-//     ldr: Operand,
-//     str: Operand,
-//
-//     ineg: void,
-//     fneg: void,
-//     binv: void,
-//     lnot: void,
-//
-//     iadd: Operand,
-//     fadd: Operand,
-//     isub: Operand,
-//     fsub: Operand,
-//     imul: Operand,
-//     fmul: Operand,
-//     idiv: Operand,
-//     fdiv: Operand,
-//     imod: Operand,
-//     fmod: Operand,
-//     ipow: Operand,
-//     fpow: Operand,
-//
-//     bor: Operand,
-//     band: Operand,
-//     bxor: Operand,
-//     lor: Operand,
-//     land: Operand,
-//
-//     pub const Tag = std.meta.Tag(Inst);
-//
-//     pub const Operand = union(enum) {
-//         register: u32,
-//     };
-// };

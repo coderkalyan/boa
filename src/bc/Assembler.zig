@@ -134,19 +134,13 @@ fn addOperand(self: *Assembler, opcode: Opcode, operand: u64) !void {
         @memcpy(bytes[2..4], asBytes(&trunc));
 
         count = 4;
-    } else if (operand <= std.math.maxInt(u32)) {
+    } else {
         bytes[0] = @intFromEnum(Opcode.dwide);
         bytes[1] = @intFromEnum(opcode);
         const trunc: u32 = @truncate(operand);
         @memcpy(bytes[2..6], asBytes(&trunc));
 
         count = 6;
-    } else {
-        bytes[0] = @intFromEnum(Opcode.qwide);
-        bytes[1] = @intFromEnum(opcode);
-        @memcpy(bytes[2..10], asBytes(&operand));
-
-        count = 10;
     }
 
     try self.code.appendSlice(self.gpa, bytes[0..count]);
@@ -158,8 +152,6 @@ fn addImmediate(self: *Assembler, opcode: Opcode, ty: type, imm: ty) !void {
         bool => 1,
         u16 => 2,
         u32 => 4,
-        u64 => 8,
-        f64 => 8,
         else => unreachable,
     };
 
@@ -170,7 +162,6 @@ fn addImmediate(self: *Assembler, opcode: Opcode, ty: type, imm: ty) !void {
         1 => {},
         2 => self.code.appendAssumeCapacity(@intFromEnum(Opcode.wide)),
         4 => self.code.appendAssumeCapacity(@intFromEnum(Opcode.dwide)),
-        8 => self.code.appendAssumeCapacity(@intFromEnum(Opcode.qwide)),
         else => unreachable,
     }
 
