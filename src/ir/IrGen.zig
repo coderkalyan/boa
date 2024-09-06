@@ -191,15 +191,20 @@ fn statement(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
 
 fn assignSimple(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const assign = b.tree.data(node).assign_simple;
+    const ident_token = b.tree.mainToken(assign.ptr);
+    const ident_str = b.tree.tokenString(ident_token);
+    const id = try b.ig.pool.put(.{ .str = ident_str });
 
     const val = try valExpr(b, scope, assign.val);
-    const ty = b.ig.typeOf(val);
+    try b.vars.put(b.ig.arena, id, val);
+    return val;
+    // const ty = b.ig.typeOf(val);
 
-    const target = try expr(b, scope, .{ .semantics = .ptr, .type_hint = ty }, assign.ptr);
-    return b.add(.{
-        .tag = .store,
-        .payload = .{ .binary = .{ .l = target, .r = val } },
-    });
+    // const target = try expr(b, scope, .{ .semantics = .ptr, .type_hint = ty }, assign.ptr);
+    // return b.add(.{
+    //     .tag = .store,
+    //     .payload = .{ .binary = .{ .l = target, .r = val } },
+    // });
 }
 
 const ResultInfo = struct {
@@ -355,32 +360,34 @@ fn identExpr(b: *Block, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Ind
             std.debug.assert(ident_scope.tag == .block);
             // TODO: check if the type is undef-union and insert a guard
             const ident_block = ident_scope.cast(Scope.Block).?;
-            const alloc = ident_block.vars.get(id).?;
-            return b.add(.{
-                .tag = .load,
-                .payload = .{ .unary = alloc },
-            });
+            return ident_block.vars.get(id).?;
+            // const alloc = ident_block.vars.get(id).?;
+            // return b.add(.{
+            //     .tag = .load,
+            //     .payload = .{ .unary = alloc },
+            // });
         },
         // since we're returning a variable to store to, if the identifer
         // doesn't exist we create (alloc) it
         // also, if the variable changed types, dealloc and realloc it
         .ptr => {
             // TODO: figure out the whole global business
-            if (b.vars.get(id)) |alloc| {
-                _ = b.vars.remove(id);
-                _ = try b.add(.{
-                    .tag = .dealloc,
-                    .payload = .{ .unary = alloc },
-                });
-            }
+            // if (b.vars.get(id)) |alloc| {
+            //     _ = b.vars.remove(id);
+            //     _ = try b.add(.{
+            //         .tag = .dealloc,
+            //         .payload = .{ .unary = alloc },
+            //     });
+            // }
 
-            const alloc = try b.add(.{
-                .tag = .alloc,
-                .payload = .{ .ip = ri.type_hint.? },
-            });
-            try b.vars.put(b.ig.arena, id, alloc);
-
-            return alloc;
+            // const alloc = try b.add(.{
+            //     .tag = .alloc,
+            //     .payload = .{ .ip = ri.type_hint.? },
+            // });
+            // try b.vars.put(b.ig.arena, id, alloc);
+            //
+            // return alloc;
+            unreachable;
         },
     }
 }
