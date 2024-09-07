@@ -279,6 +279,7 @@ const Parser = struct {
             .asterisk => 21,
             .at => 21,
             .slash => 21,
+            .slash_slash => 21,
             .percent => 22,
             .asterisk_asterisk => 23,
             .pipe => 30,

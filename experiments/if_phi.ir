@@ -1,0 +1,15 @@
+%0 = constant(bool(true))
+%1 = constant(undef)
+%2 = blockparams(%1)
+%3 = if(cond = %0, params = (%2, %12, %22), true = {
+    %10 = blockparam(0) # extract 'a' (undefined, but overwritten below)
+    %11 = constant(int(5))
+    %12 = blockparams(%11)
+}, false = {
+    %20 = blockparam(0) # extract 'a' (undefined, but overwritten below)
+    %21 = constant(int(6))
+    %22 = blockparams(%21)
+})
+%30 = result(%3, 0) # extract 'a' from the branch
+%31 = constant(int(2))
+%32 = mul(%30, %31)

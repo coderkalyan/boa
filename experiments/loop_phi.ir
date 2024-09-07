@@ -1,0 +1,15 @@
+%0 = constant(int(1))
+%1 = blockparams(%0) # pass 'a' into the loop
+%2 = loop(branch = %11, params = (%1, %12, %23), cond = {
+    %10 = blockparam(0) # extract 'a'
+    %11 = constant(bool(true))
+    %12 = blockparams(%11) # pass 'a' through, we didn't modify it
+}, body = {
+    %20 = blockparam(0) # extract 'a'
+    %21 = constant(int(1))
+    %22 = add(%20, %20)
+    %23 = blockparams(%22) # 'a' is now the result of an addition
+})
+%30 = result(%2, 0) # extract 'a' from the loop
+%31 = constant(int(2))
+%32 = mul(%30, %31)

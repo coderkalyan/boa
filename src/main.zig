@@ -48,7 +48,7 @@ pub fn main() !void {
     const out = std.io.getStdOut();
     var buffered_out = std.io.bufferedWriter(out.writer());
     const writer = buffered_out.writer();
-    _ = writer;
+    // _ = writer;
 
     // var lexer = try Lexer.init(source, arena.allocator());
     // while (true) {
@@ -74,24 +74,24 @@ pub fn main() !void {
 
             // ig.lowerFunction(stmt);
             const ir = try IrGen.generate(gpa, &pool, &tree, function.body);
-            // {
-            //     const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-            //     var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
-            //     try renderer.render();
-            //     try buffered_out.flush();
-            // }
+            {
+                const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+                var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
+                try renderer.render();
+                try buffered_out.flush();
+            }
 
-            // try writer.print("\n", .{});
+            try writer.print("\n", .{});
 
             const bytecode = try Assembler.assemble(gpa, &pool, &ir);
-            // {
-            //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-            //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
-            //     try renderer.render();
-            //     try buffered_out.flush();
-            // }
+            {
+                const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+                var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
+                try renderer.render();
+                try buffered_out.flush();
+            }
 
-            try Interpreter.entry(gpa, &bytecode);
+            // try Interpreter.entry(gpa, &bytecode);
         }
     }
 }

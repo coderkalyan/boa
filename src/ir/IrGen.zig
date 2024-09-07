@@ -417,39 +417,53 @@ fn binaryExpr(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
     const lty = ig.typeOf(l);
     const rty = ig.typeOf(r);
     std.debug.assert(lty == rty);
-    const ty = lty;
+    // const ty = lty;
 
     const tag: Ir.Inst.Tag = switch (b.tree.tokenTag(op_token)) {
-        .plus => switch (ty) {
-            .int => .iadd,
-            .float => .fadd,
-            else => unreachable,
-        },
-        .minus => switch (ty) {
-            .int => .isub,
-            .float => .fsub,
-            else => unreachable,
-        },
-        .asterisk => switch (ty) {
-            .int => .imul,
-            .float => .fmul,
-            else => unreachable,
-        },
-        .slash => switch (ty) {
-            .int => .idiv,
-            .float => .fdiv,
-            else => unreachable,
-        },
-        .slash_slash => switch (ty) {
-            .int => .idiv,
-            .float => .fdiv,
-            else => unreachable,
-        },
-        .asterisk_asterisk => switch (ty) {
-            .int => .ipow,
-            .float => .fpow,
-            else => unreachable,
-        },
+        .plus => .add,
+        .minus => .sub,
+        .asterisk => .mul,
+        .slash, .slash_slash => .div,
+        .percent => .mod,
+        .asterisk_asterisk => .pow,
+        // .plus => switch (ty) {
+        //     .int => .iadd,
+        //     .float => .fadd,
+        //     else => unreachable,
+        // },
+        // .minus => switch (ty) {
+        //     .int => .isub,
+        //     .float => .fsub,
+        //     else => unreachable,
+        // },
+        // .asterisk => switch (ty) {
+        //     .int => .imul,
+        //     .float => .fmul,
+        //     else => unreachable,
+        // },
+        // .slash => switch (ty) {
+        //     .int => .idiv,
+        //     .float => .fdiv,
+        //     else => unreachable,
+        // },
+        // .slash_slash => switch (ty) {
+        //     .int => .idiv,
+        //     .float => .fdiv,
+        //     else => unreachable,
+        // },
+        // .asterisk_asterisk => switch (ty) {
+        //     .int => .ipow,
+        //     .float => .fpow,
+        //     else => unreachable,
+        // },
+        // .percent => switch (ty) {
+        //     .int => .imod,
+        //     .float => .fmod,
+        //     else => unreachable,
+        // },
+        // .equal_equal => switch (ty) {
+        //
+        // },
         else => unreachable,
     };
 
