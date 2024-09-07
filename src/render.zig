@@ -367,10 +367,8 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 },
             }
 
-            // ptr += op_width;
-            // try writer.print("\n", .{});
             for (start..ptr) |i| try writer.print("{x:0>2} ", .{code[i]});
-            for (ptr..start + 8) |_| try writer.print("   ", .{});
+            if (ptr < (start + 8)) for (ptr..start + 8) |_| try writer.print("   ", .{});
             try writer.print(": {s} {s}\n", .{ @tagName(tag), format });
 
             return ptr;
