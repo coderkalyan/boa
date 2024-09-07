@@ -31,15 +31,10 @@ pub const Inst = struct {
         // float to int
         // .unary
         ftoi,
-        // unary addition
-        // .unary
-        // TODO: check if this is needed
-        // pos,
 
         // negation (unary subtraction)
         // .unary
-        ineg,
-        fneg,
+        neg,
         // bitwise invert
         // .unary
         binv,
@@ -47,84 +42,67 @@ pub const Inst = struct {
         // .unary
         lnot,
 
+        // .binary
         // addition
-        // .binary
         add,
-        // iadd,
-        // fadd,
         // subtraction
-        // .binary
         sub,
-        // isub,
-        // fsub,
         // multiplication
-        // .binary
         mul,
-        // imul,
-        // fmul,
         // division
-        // .binary
         div,
-        // idiv,
-        // fdiv,
         // modulo
-        // .binary
         mod,
-        // imod,
-        // fmod,
         // raise to power
-        // .binary
         pow,
-        // ipow,
-        // fpow,
         // matrix multiplication
-        // .binary
         // matmul,
         // bitwise or
-        // .binary
         bor,
         // bitwise and
-        // .binary
         band,
         // bitwise xor
-        // .binary
         bxor,
+        // logical shift left
+        sll,
+        // arithmetic shift right
+        sra,
         // boolean or
-        // .binary
         lor,
         // boolean and
-        // .binary
         land,
         // equal
-        // .binary
-        ieq,
-        feq,
-        beq,
+        eq,
         // not equal
         // .binary
-        ine,
-        fne,
-        bne,
+        ne,
+        // ine,
+        // fne,
+        // bne,
         // less than
         // .binary
-        ilt,
-        flt,
-        blt,
+        lt,
+        // ilt,
+        // flt,
+        // blt,
         // greater than
         // .binary
-        igt,
-        fgt,
-        bgt,
+        gt,
+        // igt,
+        // fgt,
+        // bgt,
         // less than equal
         // .binary
-        ile,
-        fle,
-        ble,
+        le,
+        // ile,
+        // fle,
+        // ble,
         // greater than equal
         // .binary
-        ige,
-        fge,
-        bge,
+        ge,
+        // ige,
+        // fge,
+        // bge,
 
         // return a value
         ret,
@@ -204,8 +182,6 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .constant => ir.pool.get(payload.ip).tv.ty,
         .itof => .float,
         .ftoi => .int,
-        .ineg => .int,
-        .fneg => .float,
         .binv => .int,
         .lnot => .bool,
         .add,
@@ -215,23 +191,10 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .mod,
         .pow,
         => ir.typeOf(payload.binary.l),
-        // .iadd => .int,
-        // .fadd => .float,
-        // .isub => .int,
-        // .fsub => .float,
-        // .imul => .int,
-        // .fmul => .float,
-        // .idiv => .int,
-        // .fdiv => .float,
-        // .imod => .int,
-        // .fmod => .float,
-        // .ipow => .int,
-        // .fpow => .float,
-        .bor, .band, .bxor => .int,
+        .neg => ir.typeOf(payload.unary),
+        .bor, .band, .bxor, .sll, .sra => .int,
         .lor, .land => .bool,
-        .ieq, .feq, .beq, .ine, .fne, .bne => .bool,
-        .ilt, .flt, .blt, .igt, .fgt, .bgt => .bool,
-        .ile, .fle, .ble, .ige, .fge, .bge => .bool,
+        .eq, .ne, .lt, .gt, .le, .ge => .bool,
         .ret => ir.typeOf(payload.unary),
         .alloc => unreachable,
         .load => ir.insts.items(.payload)[@intFromEnum(payload.unary)].ip,
@@ -245,8 +208,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .constant => .ip,
         .itof,
         .ftoi,
-        .ineg,
-        .fneg,
+        .neg,
         .binv,
         .lnot,
         => .unary,
@@ -256,41 +218,19 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .div,
         .mod,
         .pow,
-        // .iadd,
-        // .fadd,
-        // .isub,
-        // .fsub,
-        // .idiv,
-        // .fdiv,
-        // .imul,
-        // .fmul,
-        // .imod,
-        // .fmod,
-        // .ipow,
-        // .fpow,
         .bor,
         .band,
         .bxor,
+        .sll,
+        .sra,
         .lor,
         .land,
-        .ieq,
-        .feq,
-        .beq,
-        .ine,
-        .fne,
-        .bne,
-        .ilt,
-        .flt,
-        .blt,
-        .igt,
-        .fgt,
-        .bgt,
-        .ile,
-        .fle,
-        .ble,
-        .ige,
-        .fge,
-        .bge,
+        .eq,
+        .ne,
+        .lt,
+        .gt,
+        .le,
+        .ge,
         => .binary,
         .ret => .unary,
         .alloc => .ip,

@@ -426,44 +426,17 @@ fn binaryExpr(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
         .slash, .slash_slash => .div,
         .percent => .mod,
         .asterisk_asterisk => .pow,
-        // .plus => switch (ty) {
-        //     .int => .iadd,
-        //     .float => .fadd,
-        //     else => unreachable,
-        // },
-        // .minus => switch (ty) {
-        //     .int => .isub,
-        //     .float => .fsub,
-        //     else => unreachable,
-        // },
-        // .asterisk => switch (ty) {
-        //     .int => .imul,
-        //     .float => .fmul,
-        //     else => unreachable,
-        // },
-        // .slash => switch (ty) {
-        //     .int => .idiv,
-        //     .float => .fdiv,
-        //     else => unreachable,
-        // },
-        // .slash_slash => switch (ty) {
-        //     .int => .idiv,
-        //     .float => .fdiv,
-        //     else => unreachable,
-        // },
-        // .asterisk_asterisk => switch (ty) {
-        //     .int => .ipow,
-        //     .float => .fpow,
-        //     else => unreachable,
-        // },
-        // .percent => switch (ty) {
-        //     .int => .imod,
-        //     .float => .fmod,
-        //     else => unreachable,
-        // },
-        // .equal_equal => switch (ty) {
-        //
-        // },
+        .equal_equal => .eq,
+        .bang_equal => .ne,
+        .l_angle => .lt,
+        .r_angle => .gt,
+        .l_angle_equal => .le,
+        .r_angle_equal => .ge,
+        .ampersand => .band,
+        .pipe => .bor,
+        .caret => .bxor,
+        .l_angle_l_angle => .sll,
+        .r_angle_r_angle => .sra,
         else => unreachable,
     };
 

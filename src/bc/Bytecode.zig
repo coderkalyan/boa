@@ -93,6 +93,10 @@ pub const Opcode = enum(u8) {
     // bitwise xor register with accumulator
     // operand: register
     bxor,
+    // logical shift left
+    sll,
+    // arithmetic shift right
+    sra,
     // boolean or register with accumulator
     // operand: register
     lor,
