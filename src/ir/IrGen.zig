@@ -237,6 +237,7 @@ fn expr(b: *Block, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
             .integer_literal => integerLiteral(b, scope, node),
             .float_literal => floatLiteral(b, scope, node),
             .ident => identExpr(b, scope, ri, node),
+            .unary => unaryExpr(b, scope, node),
             .binary => binaryExpr(b, scope, node),
             else => unexpectedNode(b, node),
         },
@@ -443,6 +444,25 @@ fn binaryExpr(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
     return b.add(.{
         .tag = tag,
         .payload = .{ .binary = .{ .l = l, .r = r } },
+    });
+}
+
+fn unaryExpr(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+    const op_token = b.tree.mainToken(node);
+    const unary = b.tree.data(node).unary;
+
+    const operand = try valExpr(b, scope, unary);
+    const tag: Ir.Inst.Tag = switch (b.tree.tokenTag(op_token)) {
+        .plus => unreachable, // TODO: implement this? or no-op
+        .minus => .neg,
+        .tilde => .binv,
+        .k_not => .lnot,
+        else => unreachable,
+    };
+
+    return b.add(.{
+        .tag = tag,
+        .payload = .{ .unary = operand },
     });
 }
 

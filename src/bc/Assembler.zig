@@ -103,6 +103,7 @@ fn generate(self: *Assembler, inst: Ir.Index) !void {
         .le,
         .ge,
         => try self.binaryOp(inst),
+        .neg, .binv, .lnot => try self.unaryOp(inst),
         else => {},
     }
 }
@@ -261,4 +262,25 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
     if (dead_bits & 0x2 != 0) self.unassign(binary.r);
     const dest = try self.assign(inst);
     try self.add(opcode, &.{ dest, op1, op2 });
+}
+
+fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
+    const unary = self.ir.instPayload(inst).unary;
+    const dead_bits = self.ir.liveness.deadBits(inst);
+    const ty = self.pool.get(self.ir.typeOf(unary)).ty;
+    const opcode: Opcode = switch (self.ir.instTag(inst)) {
+        .neg => switch (ty) {
+            .int => .ineg,
+            .float => .fneg,
+            else => unreachable,
+        },
+        .binv => .binv,
+        .lnot => .lnot,
+        else => unreachable,
+    };
+
+    const op = self.getSlot(unary);
+    if (dead_bits & 0x1 != 0) self.unassign(unary);
+    const dest = try self.assign(inst);
+    try self.add(opcode, &.{ dest, op });
 }

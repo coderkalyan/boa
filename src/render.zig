@@ -347,15 +347,10 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     format = try std.fmt.allocPrint(self.arena, "{s}r{}, 0x{x:0>8} ({}) ", .{ format, reg, imm, float });
                     ptr += 2 * op_width;
                 },
-                // else => {},
-                // .ineg,
-                // .fneg,
-                // .binv,
-                // .lnot,
-                // => {
-                //     const imm = self.readOperand(ptr, op_width);
-                //     try writer.print("0x{x:0>8} ({}) ", .{ imm, @as(f32, @bitCast(imm)) });
-                // },
+                .ineg,
+                .fneg,
+                .binv,
+                .lnot,
                 .mov,
                 => {
                     const op1 = self.readOperand(ptr, op_width);
