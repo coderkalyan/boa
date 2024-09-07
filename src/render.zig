@@ -241,9 +241,13 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
         }
 
         pub fn render(self: *Self) !void {
+            try self.renderBlock(self.ir.block);
+        }
+
+        pub fn renderBlock(self: *Self, block: Ir.ExtraIndex) WriterType.Error!void {
             const ir = self.ir;
 
-            const slice = ir.extraData(Ir.Inst.ExtraSlice, ir.block);
+            const slice = ir.extraData(Ir.Inst.ExtraSlice, block);
             const insts = ir.extraSlice(slice);
             for (insts) |inst| {
                 try self.renderInst(@enumFromInt(inst));
@@ -265,6 +269,23 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
             const tag = ir.insts.items(.tag)[index];
             const payload = ir.insts.items(.payload)[index];
             switch (tag) {
+                .branch_double => {
+                    const cond = payload.op_extra.op;
+                    const exec = ir.extraData(Ir.Inst.BranchDouble, payload.op_extra.extra);
+                    try writer.print("if_else(%{}, true = {{", .{@intFromEnum(cond)});
+                    self.stream.indent();
+                    try self.stream.newline();
+                    try self.renderBlock(exec.exec_true);
+                    self.stream.dedent();
+
+                    try writer.print("}}, false = {{", .{});
+                    self.stream.indent();
+                    try self.stream.newline();
+                    try self.renderBlock(exec.exec_false);
+                    self.stream.dedent();
+
+                    try writer.print("}})", .{});
+                },
                 inline else => {
                     try writer.print("{s}(", .{@tagName(tag)});
 
@@ -283,6 +304,7 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                             try writer.print("{s}%{}, {s}%{}", .{ dead_l, l, dead_r, r });
                         },
                         .ip => try ir.pool.print(writer, payload.ip),
+                        .op_extra => unreachable,
                     }
                     try writer.print(")", .{});
                     try self.stream.newline();

@@ -795,6 +795,7 @@ const Parser = struct {
             });
         }
 
+        _ = try p.expect(.k_else);
         // _ = p.eatCurrent();
         // if (p.current() == .k_if) {
         //     // chained if

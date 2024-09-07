@@ -121,6 +121,8 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
                 bits |= 0x2;
                 try analysis.live_set.put(arena, payload.binary.r, {});
             },
+            // TODO: what to do here?
+            .branch_double => {},
         }
 
         const elem: u8 = if (i % 2 == 0) bits else @as(u8, bits) << 4;

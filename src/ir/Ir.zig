@@ -74,35 +74,15 @@ pub const Inst = struct {
         // equal
         eq,
         // not equal
-        // .binary
         ne,
-        // ine,
-        // fne,
-        // bne,
         // less than
-        // .binary
         lt,
-        // ilt,
-        // flt,
-        // blt,
         // greater than
-        // .binary
         gt,
-        // igt,
-        // fgt,
-        // bgt,
         // less than equal
-        // .binary
         le,
-        // ile,
-        // fle,
-        // ble,
         // greater than equal
-        // .binary
         ge,
-        // ige,
-        // fge,
-        // bge,
 
         // return a value
         ret,
@@ -119,6 +99,10 @@ pub const Inst = struct {
         // free a previously allocated stack slot
         // .unary = alloc inst
         dealloc,
+
+        // if else
+        // .op_extra = condition inst and BranchDouble extra
+        branch_double,
     };
 
     pub const Payload = union {
@@ -131,6 +115,10 @@ pub const Inst = struct {
         binary: struct {
             l: Index,
             r: Index,
+        },
+        op_extra: struct {
+            op: Index,
+            extra: ExtraIndex,
         },
 
         comptime {
@@ -146,12 +134,18 @@ pub const Inst = struct {
             ip,
             unary,
             binary,
+            op_extra,
         };
     };
 
     pub const ExtraSlice = struct {
         start: ExtraIndex,
         end: ExtraIndex,
+    };
+
+    pub const BranchDouble = struct {
+        exec_true: ExtraIndex,
+        exec_false: ExtraIndex,
     };
 };
 
@@ -200,6 +194,9 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .load => ir.insts.items(.payload)[@intFromEnum(payload.unary)].ip,
         .store => ir.typeOf(payload.binary.r),
         .dealloc => unreachable,
+        // TODO: confirm, but we shouldn't use result of if
+        // this may change when adding phi insts
+        .branch_double => unreachable,
     };
 }
 
@@ -237,6 +234,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .load => .unary,
         .store => .binary,
         .dealloc => .unary,
+        .branch_double => .op_extra,
     };
 }
 

@@ -158,7 +158,7 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
 //     }
 // }
 
-fn block(b: *Block, scope: *Scope, node: Node.Index) !Ir.ExtraIndex {
+fn block(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.ExtraIndex {
     var inner = Block.init(b.ig, scope);
     defer inner.deinit();
 
@@ -182,6 +182,7 @@ fn statement(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
 
     return switch (tag) {
         .assign_simple => assignSimple(b, scope, node),
+        .if_else => ifElse(b, scope, node),
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
             unreachable;
@@ -198,13 +199,33 @@ fn assignSimple(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const val = try valExpr(b, scope, assign.val);
     try b.vars.put(b.ig.arena, id, val);
     return val;
-    // const ty = b.ig.typeOf(val);
+}
 
-    // const target = try expr(b, scope, .{ .semantics = .ptr, .type_hint = ty }, assign.ptr);
-    // return b.add(.{
-    //     .tag = .store,
-    //     .payload = .{ .binary = .{ .l = target, .r = val } },
-    // });
+fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
+    const if_else = b.tree.data(node).if_else;
+    const exec = b.tree.extraData(if_else.exec, Node.IfElse);
+
+    const cond = try valExpr(b, scope, if_else.condition);
+    const exec_true = try block(b, scope, exec.exec_true);
+    const exec_false = try block(b, scope, exec.exec_false);
+    return b.add(.{ .tag = .branch_double, .payload = .{
+        .op_extra = .{
+            .op = cond,
+            .extra = try addExtra(b.ig, Inst.BranchDouble{
+                .exec_true = exec_true,
+                .exec_false = exec_false,
+            }),
+        },
+    } });
+    // const exec_true_inner = Block.init(b.ig, scope);
+    // defer exec_true_inner.deinit();
+    // const exec_false_inner = Block.init(b.ig, scope);
+    // defer exec_false_inner.deinit();
+    //
+    // const cond = try valExpr(b, scope, if_else.condition);
+    // try blockInner(&exec_true_inner, &exec_true_inner.base, exec.exec_true);
+    // const exec_true = try b.addBlock(&inner);
+    // try blockInner(&exec_false_inner, &exec_false_inner.base, exec.exec_false);
 }
 
 const ResultInfo = struct {
