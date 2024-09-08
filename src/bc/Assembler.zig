@@ -98,7 +98,10 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         .phi => try self.phi(inst),
     }
 
-    if (dead_bits & 0x8 != 0) self.unassign(inst);
+    switch (ir.insts.items(.tag)[index]) {
+        .branch_double => {},
+        else => if (dead_bits & 0x8 != 0) self.unassign(inst),
+    }
 }
 
 inline fn add(self: *Assembler, tag: Bytecode.Inst.Tag, payload: Bytecode.Inst.Payload) !void {
@@ -137,12 +140,14 @@ fn assign(self: *Assembler, inst: Ir.Index) !Bytecode.Register {
 }
 
 fn unassign(self: *Assembler, inst: Ir.Index) void {
+    if (!self.active_slots.contains(inst)) std.debug.print("no: {}\n", .{@intFromEnum(inst)});
     const index = self.active_slots.get(inst).?;
     std.debug.assert(self.active_slots.remove(inst));
     self.free_slots.appendAssumeCapacity(index);
 }
 
 fn getSlot(self: *Assembler, inst: Ir.Index) Bytecode.Register {
+    if (!self.active_slots.contains(inst)) std.debug.print("no: {}\n", .{@intFromEnum(inst)});
     return self.active_slots.get(inst).?;
 }
 

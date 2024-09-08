@@ -347,8 +347,11 @@ fn trap(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slo
     _ = pc;
     _ = tags;
     _ = payloads;
-    _ = stack;
+    // _ = stack;
 
     std.debug.print("trap\n", .{});
+    std.debug.print("stack: ", .{});
+    for (0..4) |i| std.debug.print("r{} = {}\n", .{ i, stack[i].int });
+    std.debug.print("\n", .{});
     // while (true) {}
 }
