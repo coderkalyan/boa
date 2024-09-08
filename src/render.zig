@@ -285,6 +285,7 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     self.stream.dedent();
 
                     try writer.print("}})", .{});
+                    try self.stream.newline();
                 },
                 inline else => {
                     try writer.print("{s}(", .{@tagName(tag)});

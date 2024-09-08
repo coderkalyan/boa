@@ -143,6 +143,9 @@ fn add(self: *Assembler, opcode: Opcode, operands: []const u32) !void {
     }
 }
 
+// TODO: perf shows that this single O(n) function is *ridiculously* slow,
+// accounting for 70-80% of the entire execution time of the compiler.
+// fix this to get any reasonable level of performance
 fn assign(self: *Assembler, inst: Ir.Index) !u32 {
     for (self.stack_frame.items(.live), 0..) |live, i| {
         if (live) continue;

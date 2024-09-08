@@ -103,6 +103,9 @@ pub const Inst = struct {
         // if else
         // .op_extra = condition inst and BranchDouble extra
         branch_double,
+
+        phiarg,
+        phi,
     };
 
     pub const Payload = union {
@@ -197,6 +200,9 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         // TODO: confirm, but we shouldn't use result of if
         // this may change when adding phi insts
         .branch_double => unreachable,
+        .phiarg => ir.typeOf(payload.unary),
+        // TODO: union the types
+        .phi => ir.typeOf(payload.binary.l),
     };
 }
 
@@ -208,6 +214,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .neg,
         .binv,
         .lnot,
+        .phiarg,
         => .unary,
         .add,
         .sub,
@@ -228,6 +235,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .gt,
         .le,
         .ge,
+        .phi,
         => .binary,
         .ret => .unary,
         .alloc => .ip,

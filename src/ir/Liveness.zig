@@ -82,6 +82,7 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             .lnot,
             .load,
             .ret,
+            .phiarg,
             => if (!analysis.live_set.contains(payload.unary)) {
                 bits |= 0x1;
                 try analysis.live_set.put(arena, payload.unary, {});
@@ -105,6 +106,7 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             .gt,
             .le,
             .ge,
+            .phi,
             => {
                 if (!analysis.live_set.contains(payload.binary.l)) {
                     bits |= 0x1;

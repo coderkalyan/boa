@@ -201,14 +201,41 @@ fn assignSimple(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     return val;
 }
 
+fn blockIfStatement(
+    b: *Block,
+    scope: *Scope,
+    node: Node.Index,
+    export_vars: *std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index),
+) error{OutOfMemory}!Ir.ExtraIndex {
+    var inner = Block.init(b.ig, scope);
+    defer inner.deinit();
+
+    // first, process the block like normal
+    try blockInner(&inner, &inner.base, node);
+    // for if statements, add `phiarg` nodes for all local vars and pass
+    // them to the parent scope
+    try export_vars.ensureUnusedCapacity(b.ig.arena, inner.vars.count());
+    var iterator = inner.vars.iterator();
+    while (iterator.next()) |entry| {
+        const arg = try inner.add(.{ .tag = .phiarg, .payload = .{ .unary = entry.value_ptr.* } });
+        export_vars.putAssumeCapacity(entry.key_ptr.*, arg);
+    }
+
+    // now seal and return the block
+    return b.addBlock(&inner);
+}
+
 fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const if_else = b.tree.data(node).if_else;
     const exec = b.tree.extraData(if_else.exec, Node.IfElse);
 
     const cond = try valExpr(b, scope, if_else.condition);
-    const exec_true = try block(b, scope, exec.exec_true);
-    const exec_false = try block(b, scope, exec.exec_false);
-    return b.add(.{ .tag = .branch_double, .payload = .{
+    var inner_vars_true: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
+    const exec_true = try blockIfStatement(b, scope, exec.exec_true, &inner_vars_true);
+    var inner_vars_false: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
+    const exec_false = try blockIfStatement(b, scope, exec.exec_false, &inner_vars_false);
+
+    const branch_double = try b.add(.{ .tag = .branch_double, .payload = .{
         .op_extra = .{
             .op = cond,
             .extra = try addExtra(b.ig, Inst.BranchDouble{
@@ -217,15 +244,25 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
             }),
         },
     } });
-    // const exec_true_inner = Block.init(b.ig, scope);
-    // defer exec_true_inner.deinit();
-    // const exec_false_inner = Block.init(b.ig, scope);
-    // defer exec_false_inner.deinit();
-    //
-    // const cond = try valExpr(b, scope, if_else.condition);
-    // try blockInner(&exec_true_inner, &exec_true_inner.base, exec.exec_true);
-    // const exec_true = try b.addBlock(&inner);
-    // try blockInner(&exec_false_inner, &exec_false_inner.base, exec.exec_false);
+
+    // TODO: support maybe undef types (once unions are in place)
+    try b.vars.ensureUnusedCapacity(
+        b.ig.arena,
+        @max(inner_vars_true.count(), inner_vars_false.count()),
+    );
+    var iterator = inner_vars_true.iterator();
+    while (iterator.next()) |entry| {
+        const id = entry.key_ptr.*;
+        const arg_true = entry.value_ptr.*;
+        if (inner_vars_false.get(id)) |arg_false| {
+            const phi = try b.add(.{ .tag = .phi, .payload = .{
+                .binary = .{ .l = arg_true, .r = arg_false },
+            } });
+            b.vars.putAssumeCapacity(id, phi);
+        }
+    }
+
+    return branch_double;
 }
 
 const ResultInfo = struct {

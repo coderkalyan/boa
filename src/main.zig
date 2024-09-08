@@ -76,22 +76,27 @@ pub fn main() !void {
             const ir = try IrGen.generate(gpa, &pool, &tree, function.body);
             {
                 const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+                // _ = ir_renderer;
                 var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
                 try renderer.render();
                 try buffered_out.flush();
             }
 
-            try writer.print("\n", .{});
+            try writer.print("{}\n", .{ir.insts.len});
+            // _ = ir;
 
             const bytecode = try Assembler.assemble(gpa, &pool, &ir);
             {
                 const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+                // _ = bytecode_renderer;
                 var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
                 try renderer.render();
                 try buffered_out.flush();
             }
+            try writer.print("{}\n", .{bytecode.code.len});
 
             // try Interpreter.entry(gpa, &bytecode);
+            // _ = bytecode;
         }
     }
 }
