@@ -8,6 +8,7 @@ const Assembler = @import("bc/Assembler.zig");
 const InternPool = @import("InternPool.zig");
 const render = @import("render.zig");
 const Interpreter = @import("rt/Interpreter.zig");
+const Bytecode = @import("bc/Bytecode.zig");
 
 const Node = Ast.Node;
 const max_file_size = std.math.maxInt(u32);
@@ -94,8 +95,11 @@ pub fn main() !void {
                 try buffered_out.flush();
             }
             try writer.print("{}\n\n", .{bytecode.code.len});
-
-            try Interpreter.entry(gpa, &bytecode);
+            try interpret(gpa, &bytecode);
         }
     }
+}
+
+pub fn interpret(gpa: Allocator, bytecode: *const Bytecode) !void {
+    try Interpreter.entry(gpa, bytecode);
 }

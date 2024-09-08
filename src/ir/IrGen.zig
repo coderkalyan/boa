@@ -496,6 +496,8 @@ fn binaryExpr(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
         .caret => .bxor,
         .l_angle_l_angle => .sll,
         .r_angle_r_angle => .sra,
+        .k_or => .lor,
+        .k_and => .land,
         else => unreachable,
     };
 
@@ -550,6 +552,8 @@ fn binaryFloatDecay(b: *Block, l: *Ir.Index, r: *Ir.Index) !void {
             .float => {},
             else => unreachable,
         },
+        // nop for now, may need to revisit
+        .bool => {},
         else => unreachable,
     }
 }

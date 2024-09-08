@@ -89,16 +89,16 @@ pub const Inst = struct {
 
         // allocate a stack slot for a variable
         // .ip = type of variable
-        alloc,
+        // alloc,
         // load a value from a stack slot
         // .unary = alloc inst
-        load,
+        // load,
         // store a value in a stack slot
         // .binary = alloc inst and operand to store
-        store,
+        // store,
         // free a previously allocated stack slot
         // .unary = alloc inst
-        dealloc,
+        // dealloc,
 
         // if else
         // .op_extra = condition inst and BranchDouble extra
@@ -193,10 +193,6 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .lor, .land => .bool,
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
         .ret => ir.typeOf(payload.unary),
-        .alloc => unreachable,
-        .load => ir.insts.items(.payload)[@intFromEnum(payload.unary)].ip,
-        .store => ir.typeOf(payload.binary.r),
-        .dealloc => unreachable,
         // TODO: confirm, but we shouldn't use result of if
         // this may change when adding phi insts
         .branch_double => unreachable,
@@ -238,10 +234,6 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .phi,
         => .binary,
         .ret => .unary,
-        .alloc => .ip,
-        .load => .unary,
-        .store => .binary,
-        .dealloc => .unary,
         .branch_double => .op_extra,
     };
 }

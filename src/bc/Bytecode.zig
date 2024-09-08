@@ -6,7 +6,7 @@ ir: *const Ir,
 code: List.Slice,
 
 pub const List = std.MultiArrayList(Inst);
-pub const Index = enum(u32) { _ };
+pub const Register = enum(u32) { _ };
 pub const Inst = struct {
     tag: Tag,
     payload: Payload,
@@ -22,6 +22,13 @@ pub const Inst = struct {
         // move from register to register
         // .unary: src register
         mov,
+
+        // type casting
+        // .unary: operand
+        // int to float
+        itof,
+        // float to int
+        ftoi,
 
         // unary operations
         // .unary: operand
@@ -97,17 +104,17 @@ pub const Inst = struct {
     };
 
     pub const Payload = struct {
-        dst: Index,
+        dst: Register,
         ops: union {
-            unary: Index,
+            unary: Register,
             binary: struct {
-                op1: Index,
-                op2: Index,
+                op1: Register,
+                op2: Register,
             },
             imm: [4]u8,
             wimm: [8]u8,
             branch: struct {
-                condition: Index,
+                condition: Register,
                 target: u32,
             },
         },

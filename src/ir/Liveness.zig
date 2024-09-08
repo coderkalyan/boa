@@ -74,13 +74,13 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
         switch (tag) {
             .constant => {},
             // TODO: think about how to handle these
-            .alloc, .dealloc => {},
+            // .alloc, .dealloc => {},
             .itof,
             .ftoi,
             .neg,
             .binv,
             .lnot,
-            .load,
+            // .load,
             .ret,
             .phiarg,
             => if (!analysis.live_set.contains(payload.unary)) {
@@ -119,10 +119,10 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
                 }
             },
             // TODO: is this correct?
-            .store => if (!analysis.live_set.contains(payload.binary.r)) {
-                bits |= 0x2;
-                try analysis.live_set.put(arena, payload.binary.r, {});
-            },
+            // .store => if (!analysis.live_set.contains(payload.binary.r)) {
+            //     bits |= 0x2;
+            //     try analysis.live_set.put(arena, payload.binary.r, {});
+            // },
             // TODO: what to do here?
             .branch_double => {},
         }

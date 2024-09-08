@@ -353,7 +353,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     @memcpy(asBytes(&int), &payload.ops.imm);
                     @memcpy(asBytes(&float), &payload.ops.imm);
 
-                    try writer.print("x{}, 0x{x:0>4} ({})\n", .{ dst, int, float });
+                    try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
                 },
                 .ldw => {
                     var int: u64 = undefined;
@@ -361,7 +361,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     @memcpy(asBytes(&int), &payload.ops.wimm);
                     @memcpy(asBytes(&float), &payload.ops.wimm);
 
-                    try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
+                    try writer.print("x{}, 0x{x:0>16} ({})\n", .{ dst, int, float });
                 },
                 .ineg,
                 .fneg,
