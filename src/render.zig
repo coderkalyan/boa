@@ -8,9 +8,9 @@ const Type = @import("type.zig").Type;
 const Allocator = std.mem.Allocator;
 
 const io = std.io;
+const asBytes = std.mem.asBytes;
 
 const Node = Ast.Node;
-const Opcode = Bytecode.Opcode;
 
 pub fn AstRenderer(comptime width: u32, comptime WriterType: anytype) type {
     return struct {
@@ -332,43 +332,36 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
         }
 
         pub fn render(self: *Self) !void {
-            var ptr: usize = 0;
-            while (ptr < self.bc.code.len) {
-                ptr = try self.renderInst(ptr);
+            for (0..self.bc.code.len) |i| {
+                try self.renderInst(@intCast(i));
             }
         }
 
-        fn renderInst(self: *Self, start: usize) !usize {
+        fn renderInst(self: *Self, i: u32) !void {
             const code = self.bc.code;
             const writer = self.stream.writer();
-            var ptr = start;
 
-            // read initial bytecode (either operand or width prefix)
-            var tag: Opcode = @enumFromInt(code[ptr]);
-            ptr += 1;
+            const tag = code.items(.tag)[i];
+            const payload = code.items(.payload)[i];
+            const dst: u32 = @intFromEnum(payload.dst);
 
-            // if it's a width prefix, set the number of operand bytes to read
-            const op_width: u8 = switch (tag) {
-                .wide => 2,
-                .dwide => 4,
-                else => 1,
-            };
-            if (op_width > 1) {
-                tag = @enumFromInt(code[ptr]);
-                ptr += 1;
-            }
-
-            // for (start..start + count) |i| try writer.print("{x:0>2} ", .{code[i]});
-            // for (start + count..start + 8) |_| try writer.print("   ", .{});
-            var format: []const u8 = "";
+            try writer.print("{s} ", .{@tagName(tag)});
             switch (tag) {
-                .wide, .dwide => unreachable,
                 .ld => {
-                    const reg = self.readOperand(ptr, op_width);
-                    const imm = self.readOperand(ptr + op_width, op_width);
-                    const float: f32 = @bitCast(imm);
-                    format = try std.fmt.allocPrint(self.arena, "{s}r{}, 0x{x:0>8} ({}) ", .{ format, reg, imm, float });
-                    ptr += 2 * op_width;
+                    var int: u32 = undefined;
+                    var float: f32 = undefined;
+                    @memcpy(asBytes(&int), &payload.ops.imm);
+                    @memcpy(asBytes(&float), &payload.ops.imm);
+
+                    try writer.print("x{}, 0x{x:0>4} ({})\n", .{ dst, int, float });
+                },
+                .ldw => {
+                    var int: u64 = undefined;
+                    var float: f64 = undefined;
+                    @memcpy(asBytes(&int), &payload.ops.wimm);
+                    @memcpy(asBytes(&float), &payload.ops.wimm);
+
+                    try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
                 },
                 .ineg,
                 .fneg,
@@ -376,38 +369,22 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .lnot,
                 .mov,
                 => {
-                    const op1 = self.readOperand(ptr, op_width);
-                    const op2 = self.readOperand(ptr + op_width, op_width);
-                    format = try std.fmt.allocPrint(self.arena, "{s}r{}, r{}", .{ format, op1, op2 });
-                    ptr += 2 * op_width;
+                    const op: u32 = @intFromEnum(payload.ops.unary);
+                    try writer.print("x{}, x{}\n", .{ dst, op });
                 },
-                .btrue => {
-                    const cond = self.readOperand(ptr, op_width);
-                    const offset = self.readOperand(ptr + op_width, op_width);
-                    format = try std.fmt.allocPrint(self.arena, "{s}r{}, {}", .{ format, cond, offset });
-                    ptr += 2 * op_width;
+                .branch => {
+                    const condition: u32 = @intFromEnum(payload.ops.branch.condition);
+                    const target = payload.ops.branch.target;
+                    const offset = target - i;
+                    try writer.print("x{}, {} ({})\n", .{ condition, target, offset });
                 },
+                .exit => try writer.print("\n", .{}),
                 else => {
-                    const op1 = self.readOperand(ptr, op_width);
-                    const op2 = self.readOperand(ptr + op_width, op_width);
-                    const op3 = self.readOperand(ptr + 2 * op_width, op_width);
-                    format = try std.fmt.allocPrint(self.arena, "{s}r{}, r{}, r{}", .{ format, op1, op2, op3 });
-                    ptr += 3 * op_width;
+                    const op1: u32 = @intFromEnum(payload.ops.binary.op1);
+                    const op2: u32 = @intFromEnum(payload.ops.binary.op2);
+                    try writer.print("x{}, x{}, x{}\n", .{ dst, op1, op2 });
                 },
             }
-
-            for (start..ptr) |i| try writer.print("{x:0>2} ", .{code[i]});
-            if (ptr < (start + 10)) for (ptr..start + 10) |_| try writer.print("   ", .{});
-            try writer.print(": {s} {s}\n", .{ @tagName(tag), format });
-
-            return ptr;
-        }
-
-        fn readOperand(self: *Self, start: usize, op_width: u8) u32 {
-            const code = self.bc.code;
-            var operand: u32 = 0;
-            for (0..op_width) |i| operand |= code[start + i] << @intCast(i);
-            return operand;
         }
     };
 }

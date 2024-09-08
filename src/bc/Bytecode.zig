@@ -1,134 +1,121 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Ir = @import("../ir/Ir.zig");
 
 ir: *const Ir,
-code: []const u8,
+code: List.Slice,
 
-// these opcodes are used in the "assembled" representation, see Inst for
-// the expanded version
-pub const Opcode = enum(u8) {
-    // these special opcodes mean that the operand to the following bytecode
-    // should be treated as wide (more than 1 byte, which is the default)
-    // they are reserve here to distinguish them from normal opcodes, but are
-    // emitted automatically by the bytecode assembler (not managed manually)
-    wide, // 16 bit operand
-    dwide, // 32 bit operand
+pub const List = std.MultiArrayList(Inst);
+pub const Index = enum(u32) { _ };
+pub const Inst = struct {
+    tag: Tag,
+    payload: Payload,
 
-    // load an immediate into register
-    // op1: register
-    // op2: immediate
-    ld,
+    pub const Tag = enum(u8) {
+        // load a 32 bit immediate into register
+        // .imm
+        ld,
+        // load a wide immediate (64 bit) into register
+        // .wimm,
+        ldw,
 
-    // load indirect into register
-    // op1: register
-    // op2: intern pool index
-    ldi,
+        // move from register to register
+        // .unary: src register
+        mov,
 
-    // move from register to register
-    // op1: dest register
-    // op2: src register
-    mov,
-    // load from register into accumulator
-    // operand: register
-    // ldr,
-    // store from accumulator into register
-    // operand: register
-    // str,
+        // unary operations
+        // .unary: operand
+        // integer negation
+        ineg,
+        // float negation
+        fneg,
+        // bitwise invert
+        binv,
+        // boolean invert
+        lnot,
 
-    // integer negation of accumulator
-    // no operand
-    ineg,
-    // float negation of accumulator
-    // no operand
-    fneg,
-    // bitwise invert of accumulator
-    // no operand
-    binv,
-    // boolean invert of accumulator
-    // no operand
-    lnot,
+        // binary operations
+        // .binary: (op1, op2)
+        // integer add
+        iadd,
+        // float add
+        fadd,
+        // integer subtract
+        isub,
+        // float subtract
+        fsub,
+        // integer multiply
+        imul,
+        // float multiply
+        fmul,
+        // integer divide
+        idiv,
+        // float divide
+        fdiv,
+        // integer modulo
+        imod,
+        // float modulo
+        fmod,
+        // integer raise to power
+        ipow,
+        // float raise to power
+        fpow,
+        // bitwise or
+        bor,
+        // bitwise and
+        band,
+        // bitwise xor
+        bxor,
+        // logical shift left
+        sll,
+        // arithmetic shift right
+        sra,
+        // integer equal
+        ieq,
+        // integer not equal
+        ine,
+        // integer less than
+        ilt,
+        // float less than
+        flt,
+        // integer greater than
+        igt,
+        // float greater than
+        fgt,
+        // integer less than equal
+        ile,
+        // float less than equal
+        fle,
+        // integer greater than equal
+        ige,
+        // float greater than equal
+        fge,
 
-    // integer add register to accumulator
-    // operand: register
-    iadd,
-    // float add register to accumulator
-    // operand: register
-    fadd,
-    // integer subtract register from accumulator
-    // operand: register
-    isub,
-    // float subtract register from accumulator
-    // operand: register
-    fsub,
-    // integer multiply register with accumulator
-    // operand: register
-    imul,
-    // float multiply register with accumulator
-    // operand: register
-    fmul,
-    // integer divide accumulator by register
-    // operand: register
-    idiv,
-    // float divide accumulator by register
-    // operand: register
-    fdiv,
-    // integer modulo accumulator by register
-    // operand: register
-    imod,
-    // float modulo accumulator by register
-    // operand: register
-    fmod,
-    // integer raise accumulator to register power
-    // operand: register
-    ipow,
-    // float raise accumulator to register power
-    // operand: register
-    fpow,
-    // bitwise or register with accumulator
-    // operand: register
-    bor,
-    // bitwise and register with accumulator
-    // operand: register
-    band,
-    // bitwise xor register with accumulator
-    // operand: register
-    bxor,
-    // logical shift left
-    sll,
-    // arithmetic shift right
-    sra,
-    // boolean or register with accumulator
-    // operand: register
-    lor,
-    // boolean and register with accumulator
-    // operand: register
-    land,
+        // jump to index if register is true (1)
+        branch,
+        exit,
+    };
 
-    // equal
-    // operand: register
-    ieq,
-    feq,
-    // not equal
-    // operand: register
-    ine,
-    fne,
-    // less than
-    // operand: register
-    ilt,
-    flt,
-    // greater than
-    // operand: register
-    igt,
-    fgt,
-    // less than equal
-    // operand: register
-    ile,
-    fle,
-    // greater than equal
-    // operand: register
-    ige,
-    fge,
+    pub const Payload = struct {
+        dst: Index,
+        ops: union {
+            unary: Index,
+            binary: struct {
+                op1: Index,
+                op2: Index,
+            },
+            imm: [4]u8,
+            wimm: [8]u8,
+            branch: struct {
+                condition: Index,
+                target: u32,
+            },
+        },
 
-    // branch by offset if condition is not equal to 0 (true)
-    btrue,
+        comptime {
+            if (builtin.mode != .Debug) {
+                std.debug.assert(@sizeOf(Payload) <= 12);
+            }
+        }
+    };
 };

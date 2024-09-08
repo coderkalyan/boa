@@ -82,7 +82,7 @@ pub fn main() !void {
                 try buffered_out.flush();
             }
 
-            try writer.print("{}\n", .{ir.insts.len});
+            try writer.print("{}\n\n", .{ir.insts.len});
             // _ = ir;
 
             const bytecode = try Assembler.assemble(gpa, &pool, &ir);
@@ -93,10 +93,9 @@ pub fn main() !void {
                 try renderer.render();
                 try buffered_out.flush();
             }
-            try writer.print("{}\n", .{bytecode.code.len});
+            try writer.print("{}\n\n", .{bytecode.code.len});
 
-            // try Interpreter.entry(gpa, &bytecode);
-            // _ = bytecode;
+            try Interpreter.entry(gpa, &bytecode);
         }
     }
 }

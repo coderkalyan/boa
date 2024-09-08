@@ -2,12 +2,10 @@ const std = @import("std");
 const InternPool = @import("../InternPool.zig");
 const Ir = @import("../ir/Ir.zig");
 const Bytecode = @import("Bytecode.zig");
-// const RegisterAllocator = @import("RegisterAllocator.zig");
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
 const Opcode = Bytecode.Opcode;
-const Inst = Ir.Inst;
 
 const Assembler = @This();
 
@@ -15,12 +13,12 @@ gpa: Allocator,
 arena: Allocator,
 pool: *InternPool,
 ir: *const Ir,
-code: std.ArrayListUnmanaged(u8),
-// ra: RegisterAllocator,
-// live: std.AutoArrayHashMapUnmanaged(Ir.Index, u32),
-// tmax: u32,
+code: Bytecode.List,
 // TODO: this can probably be faster
 stack_frame: std.MultiArrayList(Slot),
+// some instructions, like phis, keep track of the mapping
+// from Ir index to bytecode index, so they can be updated later
+inst_map: std.AutoHashMapUnmanaged(Ir.Index, u32),
 
 const Slot = struct {
     inst: Ir.Index,
@@ -38,18 +36,20 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .ir = ir,
         .code = .{},
         .stack_frame = .{},
+        .inst_map = .{},
     };
     try assembler.generateBlock(ir.block);
+    try assembler.add(.exit, undefined);
 
     return .{
         .ir = ir,
-        .code = try assembler.code.toOwnedSlice(gpa),
+        .code = assembler.code.toOwnedSlice(),
     };
 }
 
 fn generateBlock(self: *Assembler, index: Ir.ExtraIndex) error{OutOfMemory}!void {
     const ir = self.ir;
-    const block = ir.extraData(Inst.ExtraSlice, index);
+    const block = ir.extraData(Ir.Inst.ExtraSlice, index);
     const insts = ir.extraSlice(block);
     for (insts) |inst| {
         try self.generateInst(@enumFromInt(inst));
@@ -62,9 +62,6 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
     const index = @intFromEnum(inst);
     switch (ir.insts.items(.tag)[index]) {
         .constant => try self.constant(inst),
-        .alloc => try self.alloc(inst),
-        .load => try self.load(inst),
-        .store => try self.store(inst),
         .add,
         .sub,
         .mul,
@@ -76,8 +73,6 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         .bxor,
         .sll,
         .sra,
-        // .lor,
-        // .land,
         .eq,
         .ne,
         .lt,
@@ -85,71 +80,57 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         .le,
         .ge,
         => try self.binaryOp(inst),
-        .neg, .binv, .lnot => try self.unaryOp(inst),
+        .neg,
+        .binv,
+        .lnot,
+        => try self.unaryOp(inst),
         .branch_double => try self.branchDouble(inst),
-        // .phiarg => try self.phiarg(inst),
+        .phiarg => try self.phiarg(inst),
+        .phi => try self.phi(inst),
         else => {},
     }
 }
 
-inline fn operandWidth(operand: u32) u8 {
-    if (operand <= std.math.maxInt(u8)) return 1;
-    if (operand <= std.math.maxInt(u16)) return 2;
-    return 4;
+inline fn add(self: *Assembler, tag: Bytecode.Inst.Tag, payload: Bytecode.Inst.Payload) !void {
+    try self.code.append(self.gpa, .{ .tag = tag, .payload = payload });
 }
 
-fn add(self: *Assembler, opcode: Opcode, operands: []const u32) !void {
-    var width: u8 = 0;
-    for (operands) |operand| width = @max(width, operandWidth(operand));
+inline fn reserve(self: *Assembler, tag: Bytecode.Inst.Tag) !Bytecode.Index {
+    const index: u32 = @intCast(self.code.len);
+    try self.code.append(self.gpa, .{ .tag = tag, .payload = undefined });
+    return @enumFromInt(index);
+}
 
-    const prefix = width > 1;
-    // 1 byte for opcode, 1 byte for prefix if needed, and then width * len bytes for operand
-    const bytes = @as(usize, 1) + @intFromBool(prefix) + (width * operands.len);
-    try self.code.ensureUnusedCapacity(self.gpa, bytes);
-
-    switch (width) {
-        0, 1 => {},
-        2 => self.code.appendAssumeCapacity(@intFromEnum(Opcode.wide)),
-        4 => self.code.appendAssumeCapacity(@intFromEnum(Opcode.dwide)),
-        else => unreachable,
-    }
-
-    self.code.appendAssumeCapacity(@intFromEnum(opcode));
-
-    for (operands) |operand| {
-        var shift_out = operand;
-        inline for (0..4) |i| {
-            if (i < width) {
-                self.code.appendAssumeCapacity(@truncate(shift_out & 0xff));
-                shift_out >>= 8;
-            }
-        }
-    }
+inline fn update(self: *Assembler, inst: Bytecode.Index, payload: Bytecode.Inst.Payload) void {
+    const i = @intFromEnum(inst);
+    self.code.items(.payload)[i] = payload;
 }
 
 // TODO: perf shows that this single O(n) function is *ridiculously* slow,
 // accounting for 70-80% of the entire execution time of the compiler.
 // fix this to get any reasonable level of performance
-fn assign(self: *Assembler, inst: Ir.Index) !u32 {
+fn assign(self: *Assembler, inst: Ir.Index) !Bytecode.Index {
     for (self.stack_frame.items(.live), 0..) |live, i| {
         if (live) continue;
         self.stack_frame.set(i, .{ .live = true, .inst = inst });
-        return @intCast(i);
+        const index: u32 = @intCast(i);
+        return @enumFromInt(index);
     }
 
     try self.stack_frame.append(self.arena, .{ .live = true, .inst = inst });
-    return @intCast(self.stack_frame.len - 1);
+    const index: u32 = @intCast(self.stack_frame.len - 1);
+    return @enumFromInt(index);
 }
 
 fn unassign(self: *Assembler, inst: Ir.Index) void {
     const i = self.getSlot(inst);
-    self.stack_frame.items(.live)[i] = false;
+    self.stack_frame.items(.live)[@intFromEnum(i)] = false;
 }
 
-fn getSlot(self: *Assembler, inst: Ir.Index) u32 {
+fn getSlot(self: *Assembler, inst: Ir.Index) Bytecode.Index {
     for (0..self.stack_frame.len) |i| {
         const slot = self.stack_frame.get(i);
-        if (slot.live and slot.inst == inst) return @intCast(i);
+        if (slot.live and slot.inst == inst) return @enumFromInt(@as(u32, @intCast(i)));
     }
 
     unreachable;
@@ -159,15 +140,31 @@ fn constant(self: *Assembler, inst: Ir.Index) !void {
     const ip = self.ir.instPayload(inst).ip;
     const tv = self.pool.get(ip).tv;
 
-    const immediate: u32 = switch (tv.ty) {
-        .nonetype => unreachable, // TODO: this shouldn't emit any immediate, its implicit
-        .int => @intCast(tv.val.int),
-        .float => @bitCast(@as(f32, @floatCast(tv.val.float))),
-        .bool => @intFromBool(tv.val.bool),
-        else => unreachable,
+    const wide = switch (tv.ty) {
+        .int => tv.val.int > std.math.maxInt(u32),
+        .float => true,
+        else => false,
     };
-    const dest = try self.assign(inst);
-    try self.add(.ld, &.{ dest, immediate });
+    if (wide) {
+        var imm: [8]u8 = undefined;
+        switch (tv.ty) {
+            .int => @memcpy(&imm, asBytes(&tv.val.int)),
+            .float => @memcpy(&imm, asBytes(&tv.val.float)),
+            else => unreachable,
+        }
+        const dst = try self.assign(inst);
+        try self.add(.ldw, .{ .dst = dst, .ops = .{ .wimm = imm } });
+    } else {
+        var imm: [4]u8 = undefined;
+        switch (tv.ty) {
+            .nonetype => {},
+            .bool => @memcpy(&imm, asBytes(&@as(u32, @intFromBool(tv.val.bool)))),
+            .int => @memcpy(&imm, asBytes(&@as(u32, @truncate(tv.val.int)))),
+            else => unreachable,
+        }
+        const dst = try self.assign(inst);
+        try self.add(.ld, .{ .dst = dst, .ops = .{ .imm = imm } });
+    }
 }
 
 fn alloc(self: *Assembler, inst: Ir.Index) !void {
@@ -204,7 +201,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
     const binary = self.ir.instPayload(inst).binary;
     const dead_bits = self.ir.liveness.deadBits(inst);
     const ty = self.pool.get(self.ir.typeOf(binary.l)).ty;
-    const opcode: Opcode = switch (ty) {
+    const tag: Bytecode.Inst.Tag = switch (ty) {
         .int => switch (self.ir.instTag(inst)) {
             .add => .iadd,
             .sub => .isub,
@@ -232,8 +229,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             .div => .fdiv,
             .mod => .fmod,
             .pow => .fpow,
-            .eq => .feq,
-            .ne => .fne,
+            .eq, .ne => unreachable,
             .lt => .flt,
             .gt => .fgt,
             .le => .fle,
@@ -247,15 +243,15 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
     const op2 = self.getSlot(binary.r);
     if (dead_bits & 0x1 != 0) self.unassign(binary.l);
     if (dead_bits & 0x2 != 0) self.unassign(binary.r);
-    const dest = try self.assign(inst);
-    try self.add(opcode, &.{ dest, op1, op2 });
+    const dst = try self.assign(inst);
+    try self.add(tag, .{ .dst = dst, .ops = .{ .binary = .{ .op1 = op1, .op2 = op2 } } });
 }
 
 fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
     const unary = self.ir.instPayload(inst).unary;
     const dead_bits = self.ir.liveness.deadBits(inst);
     const ty = self.pool.get(self.ir.typeOf(unary)).ty;
-    const opcode: Opcode = switch (self.ir.instTag(inst)) {
+    const tag: Bytecode.Inst.Tag = switch (self.ir.instTag(inst)) {
         .neg => switch (ty) {
             .int => .ineg,
             .float => .fneg,
@@ -268,30 +264,46 @@ fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
 
     const op = self.getSlot(unary);
     if (dead_bits & 0x1 != 0) self.unassign(unary);
-    const dest = try self.assign(inst);
-    try self.add(opcode, &.{ dest, op });
+    const dst = try self.assign(inst);
+    try self.add(tag, .{ .dst = dst, .ops = .{ .unary = op } });
 }
 
 fn branchDouble(self: *Assembler, inst: Ir.Index) !void {
     const op_extra = self.ir.instPayload(inst).op_extra;
-    const branch_double = self.ir.extraData(Inst.BranchDouble, op_extra.extra);
+    const branch_double = self.ir.extraData(Ir.Inst.BranchDouble, op_extra.extra);
+
     // TODO: liveness for condition
     const condition = self.getSlot(op_extra.op);
-    // TODO: to make this better sized, we need assembler relaxation, which
-    // isn't trivial to implement
-    try self.add(.btrue, &.{ condition, std.math.maxInt(u32) });
-    const btrue_pc = self.code.items.len;
+    const branch = try self.reserve(.branch);
+
     try self.generateBlock(branch_double.exec_false);
-    // TODO: cleaner code patching here
-    const target_pc = self.code.items.len;
-    var offset: u32 = @intCast(target_pc - btrue_pc);
-    for (0..4) |i| {
-        self.code.items[btrue_pc - 4 + i] = @truncate(offset & 0xff);
-        offset >>= 8;
-    }
+    const target: u32 = @intCast(self.code.len);
     try self.generateBlock(branch_double.exec_true);
+    self.update(branch, .{
+        .dst = undefined,
+        .ops = .{ .branch = .{ .condition = condition, .target = target } },
+    });
 }
 
-// fn phiarg(self: *Assembler, inst: Ir.Index) !void {
-//
-// }
+fn phiarg(self: *Assembler, inst: Ir.Index) !void {
+    const mov = try self.reserve(.mov);
+    try self.inst_map.put(self.arena, inst, @intFromEnum(mov));
+}
+
+fn phi(self: *Assembler, inst: Ir.Index) !void {
+    const binary = self.ir.instPayload(inst).binary;
+    const dead_bits = self.ir.liveness.deadBits(inst);
+    const src1 = self.ir.instPayload(binary.l).unary;
+    const src2 = self.ir.instPayload(binary.r).unary;
+
+    const op1 = self.getSlot(src1);
+    const op2 = self.getSlot(src2);
+    if (dead_bits & 0x1 != 0) self.unassign(src1);
+    if (dead_bits & 0x2 != 0) self.unassign(src2);
+    const dst = try self.assign(inst);
+
+    const arg1 = self.inst_map.get(binary.l).?;
+    const arg2 = self.inst_map.get(binary.r).?;
+    self.update(@enumFromInt(arg1), .{ .dst = dst, .ops = .{ .unary = op1 } });
+    self.update(@enumFromInt(arg2), .{ .dst = dst, .ops = .{ .unary = op2 } });
+}

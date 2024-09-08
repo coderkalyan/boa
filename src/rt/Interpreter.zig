@@ -2,14 +2,19 @@ const std = @import("std");
 const Bytecode = @import("../bc/Bytecode.zig");
 
 const Allocator = std.mem.Allocator;
-const Opcode = Bytecode.Opcode;
+const Tag = Bytecode.Inst.Tag;
+const Payload = Bytecode.Inst.Payload;
+const asBytes = std.mem.asBytes;
 
-const Handler = *const fn (in_pc: usize, code: [*]const u8, stack: [*]u64, op_width: u8) void;
-const jump_table: [std.meta.tags(Opcode).len]Handler = .{
-    trap, // wide
-    trap, // dwide
+const Handler = *const fn (
+    in_pc: usize,
+    tags: [*]const Tag,
+    payload: [*]const Payload,
+    stack: [*]u64,
+) void;
+const jump_table: [std.meta.tags(Tag).len]Handler = .{
     ld, // ld
-    trap, // ldi
+    ldw, // ldw
     trap, // mov
     trap, // ineg
     trap, // fneg
@@ -30,12 +35,10 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     trap, // bor
     trap, // band
     trap, // bxor
-    trap, // lor
-    trap, // land
+    trap, // sll
+    trap, // sra
     trap, // ieq
-    trap, // feq
     trap, // ine
-    trap, // fne
     trap, // ilt
     trap, // flt
     trap, // igt
@@ -44,48 +47,30 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     trap, // fle
     trap, // ige
     trap, // fge
+    branch, // branch
+    trap, // exit
 };
 
 pub fn entry(gpa: Allocator, bc: *const Bytecode) !void {
     const stack = try gpa.alloc(u64, 4);
     @memset(stack, 0);
     defer gpa.free(stack);
-    entryInner(0, bc.code.ptr, stack.ptr, undefined);
+
+    const tags = bc.code.items(.tag).ptr;
+    const payloads = bc.code.items(.payload).ptr;
+    entryInner(0, tags, payloads, stack.ptr);
 }
 
-fn entryInner(in_pc: usize, code: [*]const u8, stack: [*]u64, op_width: u8) void {
-    _ = op_width;
-
-    next(in_pc, code, stack);
+fn entryInner(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    next(pc, tags, payloads, stack);
 }
 
-inline fn next(in_pc: usize, code: [*]const u8, stack: [*]u64) void {
-    var pc = in_pc;
-    var width: u8 = 1;
-    var opcode: Opcode = @enumFromInt(code[pc]);
-    pc += 1;
-
-    // if encountered a wide prefix, read in the real opcode
-    switch (opcode) {
-        .wide => {
-            width = 2;
-            opcode = @enumFromInt(code[pc]);
-            pc += 1;
-        },
-        .dwide => {
-            width = 4;
-            opcode = @enumFromInt(code[pc]);
-            pc += 1;
-        },
-        else => {},
-    }
-
+inline fn next(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
     // std.debug.print("stack: ", .{});
     // for (0..4) |i| std.debug.print("r{} = {}, ", .{ i, stack[i] });
     // std.debug.print("\n", .{});
-
-    const handler = jump_table[@intFromEnum(opcode)];
-    @call(.always_tail, handler, .{ pc, code, stack, width });
+    const handler = jump_table[@intFromEnum(tags[pc])];
+    @call(.always_tail, handler, .{ pc, tags, payloads, stack });
 }
 
 inline fn readOperand(in_pc: usize, code: [*]const u8, op_width: u8) u32 {
@@ -97,54 +82,64 @@ inline fn readOperand(in_pc: usize, code: [*]const u8, op_width: u8) u32 {
     return operand;
 }
 
-fn ld(in_pc: usize, code: [*]const u8, stack: [*]u64, op_width: u8) void {
-    var pc = in_pc;
-    const dest = readOperand(pc, code, op_width);
-    pc += op_width;
-    const imm = readOperand(pc, code, op_width);
-    pc += op_width;
-
-    // std.debug.print("ld\n", .{});
-    stack[dest] = imm;
-
-    next(pc, code, stack);
+fn ld(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const dst = payloads[pc].dst;
+    const imm: u32 = @bitCast(payloads[pc].ops.imm);
+    stack[@intFromEnum(dst)] = imm;
+    next(pc + 1, tags, payloads, stack);
 }
 
-fn iadd(in_pc: usize, code: [*]const u8, stack: [*]u64, op_width: u8) void {
-    var pc = in_pc;
-    const dest = readOperand(pc, code, op_width);
-    pc += op_width;
-    const src1 = readOperand(pc, code, op_width);
-    pc += op_width;
-    const src2 = readOperand(pc, code, op_width);
-    pc += op_width;
-
-    // std.debug.print("iadd\n", .{});
-    stack[dest] = stack[src1] + stack[src2];
-
-    next(pc, code, stack);
+fn ldw(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const dst = payloads[pc].dst;
+    const imm: u64 = @bitCast(payloads[pc].ops.wimm);
+    stack[@intFromEnum(dst)] = imm;
+    next(pc + 1, tags, payloads, stack);
 }
 
-fn imul(in_pc: usize, code: [*]const u8, stack: [*]u64, op_width: u8) void {
-    var pc = in_pc;
-    const dest = readOperand(pc, code, op_width);
-    pc += op_width;
-    const src1 = readOperand(pc, code, op_width);
-    pc += op_width;
-    const src2 = readOperand(pc, code, op_width);
-    pc += op_width;
-
-    // std.debug.print("iadd\n", .{});
-    stack[dest] = stack[src1] * stack[src2];
-
-    next(pc, code, stack);
+fn iadd(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst] = stack[op1] + stack[op2];
+    next(pc + 1, tags, payloads, stack);
 }
 
-fn trap(in_pc: usize, code: [*]const u8, stack: [*]u64, op_width: u8) void {
-    _ = in_pc;
-    _ = code;
+fn isub(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst] = stack[op1] - stack[op2];
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn imul(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst] = stack[op1] * stack[op2];
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn idiv(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst] = stack[op1] / stack[op2];
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn branch(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    const condition: u32 = @intFromEnum(payloads[pc].ops.branch.condition);
+    const branch_target: u32 = payloads[pc].ops.branch.target;
+    const target = if (stack[condition] == 1) branch_target else pc + 1;
+    next(target, tags, payloads, stack);
+}
+
+fn trap(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]u64) void {
+    _ = pc;
+    _ = tags;
+    _ = payloads;
     _ = stack;
-    _ = op_width;
 
     std.debug.print("trap\n", .{});
     // while (true) {}
