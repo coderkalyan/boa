@@ -381,6 +381,12 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     format = try std.fmt.allocPrint(self.arena, "{s}r{}, r{}", .{ format, op1, op2 });
                     ptr += 2 * op_width;
                 },
+                .btrue => {
+                    const cond = self.readOperand(ptr, op_width);
+                    const offset = self.readOperand(ptr + op_width, op_width);
+                    format = try std.fmt.allocPrint(self.arena, "{s}r{}, {}", .{ format, cond, offset });
+                    ptr += 2 * op_width;
+                },
                 else => {
                     const op1 = self.readOperand(ptr, op_width);
                     const op2 = self.readOperand(ptr + op_width, op_width);
@@ -391,7 +397,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
             }
 
             for (start..ptr) |i| try writer.print("{x:0>2} ", .{code[i]});
-            if (ptr < (start + 8)) for (ptr..start + 8) |_| try writer.print("   ", .{});
+            if (ptr < (start + 10)) for (ptr..start + 10) |_| try writer.print("   ", .{});
             try writer.print(": {s} {s}\n", .{ @tagName(tag), format });
 
             return ptr;

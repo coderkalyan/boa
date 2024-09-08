@@ -31,42 +31,15 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
 
-    const block = ir.extraData(Inst.ExtraSlice, ir.block);
-    const insts = ir.extraSlice(block);
-
-    // figure out how many "fixed" registers we need to allocate
-    // for locals
-    var max: u32 = 0;
-    var used: u32 = 0;
-    for (insts) |inst| {
-        switch (ir.insts.items(.tag)[inst]) {
-            .alloc => {
-                used += 1;
-                max = @max(max, used);
-            },
-            .dealloc => used -= 1,
-            else => {},
-        }
-    }
-
     var assembler: Assembler = .{
         .gpa = gpa,
         .arena = arena.allocator(),
         .pool = pool,
         .ir = ir,
         .code = .{},
-        // .ra = try RegisterAllocator.init(arena.allocator(), max),
         .stack_frame = .{},
     };
-
-    // we know how many locals we'll have at any time, so
-    // reserve space ahead of time
-    // try assembler.map.ensureUnusedCapacity(assembler.arena, assembler.locals.reserved);
-
-    // now generate the code
-    for (insts) |inst| {
-        try assembler.generate(@enumFromInt(inst));
-    }
+    try assembler.generateBlock(ir.block);
 
     return .{
         .ir = ir,
@@ -74,7 +47,16 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     };
 }
 
-fn generate(self: *Assembler, inst: Ir.Index) !void {
+fn generateBlock(self: *Assembler, index: Ir.ExtraIndex) error{OutOfMemory}!void {
+    const ir = self.ir;
+    const block = ir.extraData(Inst.ExtraSlice, index);
+    const insts = ir.extraSlice(block);
+    for (insts) |inst| {
+        try self.generateInst(@enumFromInt(inst));
+    }
+}
+
+fn generateInst(self: *Assembler, inst: Ir.Index) !void {
     const ir = self.ir;
 
     const index = @intFromEnum(inst);
@@ -104,6 +86,8 @@ fn generate(self: *Assembler, inst: Ir.Index) !void {
         .ge,
         => try self.binaryOp(inst),
         .neg, .binv, .lnot => try self.unaryOp(inst),
+        .branch_double => try self.branchDouble(inst),
+        // .phiarg => try self.phiarg(inst),
         else => {},
     }
 }
@@ -287,3 +271,27 @@ fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
     const dest = try self.assign(inst);
     try self.add(opcode, &.{ dest, op });
 }
+
+fn branchDouble(self: *Assembler, inst: Ir.Index) !void {
+    const op_extra = self.ir.instPayload(inst).op_extra;
+    const branch_double = self.ir.extraData(Inst.BranchDouble, op_extra.extra);
+    // TODO: liveness for condition
+    const condition = self.getSlot(op_extra.op);
+    // TODO: to make this better sized, we need assembler relaxation, which
+    // isn't trivial to implement
+    try self.add(.btrue, &.{ condition, std.math.maxInt(u32) });
+    const btrue_pc = self.code.items.len;
+    try self.generateBlock(branch_double.exec_false);
+    // TODO: cleaner code patching here
+    const target_pc = self.code.items.len;
+    var offset: u32 = @intCast(target_pc - btrue_pc);
+    for (0..4) |i| {
+        self.code.items[btrue_pc - 4 + i] = @truncate(offset & 0xff);
+        offset >>= 8;
+    }
+    try self.generateBlock(branch_double.exec_true);
+}
+
+// fn phiarg(self: *Assembler, inst: Ir.Index) !void {
+//
+// }

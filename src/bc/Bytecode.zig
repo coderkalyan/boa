@@ -128,4 +128,7 @@ pub const Opcode = enum(u8) {
     // operand: register
     ige,
     fge,
+
+    // branch by offset if condition is not equal to 0 (true)
+    btrue,
 };
