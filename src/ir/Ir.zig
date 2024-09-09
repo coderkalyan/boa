@@ -129,6 +129,10 @@ pub const Inst = struct {
             extra: ExtraIndex,
             index: u32,
         },
+        phi: struct {
+            op: Index,
+            index: u32,
+        },
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -144,6 +148,7 @@ pub const Inst = struct {
             unary,
             binary,
             op_extra,
+            phi,
         };
     };
 
@@ -223,7 +228,18 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .phiarg => ir.typeOf(payload.unary),
         // TODO: union the types
         .phi => {
-            const phi = payload.extra_index;
+            const op = payload.phi.op;
+            const phis = switch (ir.instTag(op)) {
+                .if_else => slice: {
+                    const if_else = ir.extraData(Inst.IfElse, ir.instPayload(op).op_extra.extra);
+                    const bounds = ir.extraData(Inst.ExtraSlice, if_else.phis);
+                    break :slice ir.extraSlice(bounds);
+                },
+                else => unreachable,
+            };
+
+            const phi = ir.extraData(Inst.Phi, @enumFromInt(phis[payload.phi.index]));
+            return ir.typeOf(phi.src1);
         },
     };
 }
@@ -257,10 +273,10 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .gt,
         .le,
         .ge,
-        .phi,
         => .binary,
         .ret => .unary,
         .if_else, .loop => .op_extra,
+        .phi => .phi,
     };
 }
 

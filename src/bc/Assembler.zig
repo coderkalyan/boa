@@ -120,9 +120,6 @@ inline fn update(self: *Assembler, inst: Bytecode.Register, payload: Bytecode.In
     self.code.items(.payload)[i] = payload;
 }
 
-// TODO: perf shows that this single O(n) function is *ridiculously* slow,
-// accounting for 70-80% of the entire execution time of the compiler.
-// fix this to get any reasonable level of performance
 fn assign(self: *Assembler, inst: Ir.Index) !Bytecode.Register {
     if (self.free_slots.items.len > 0) {
         const register = self.free_slots.swapRemove(0);
@@ -144,6 +141,10 @@ fn unassign(self: *Assembler, inst: Ir.Index) void {
     if (!self.active_slots.contains(inst)) std.debug.print("no: {}\n", .{@intFromEnum(inst)});
     const index = self.active_slots.get(inst).?;
     std.debug.assert(self.active_slots.remove(inst));
+    self.free_slots.appendAssumeCapacity(index);
+}
+
+fn unassignRegister(self: *Assembler, index: Bytecode.Register) void {
     self.free_slots.appendAssumeCapacity(index);
 }
 
@@ -328,20 +329,91 @@ fn land(self: *Assembler, inst: Ir.Index) !void {
 }
 
 fn ifElse(self: *Assembler, inst: Ir.Index) !void {
-    const op_extra = self.ir.instPayload(inst).op_extra;
-    const if_else = self.ir.extraData(Ir.Inst.IfElse, op_extra.extra);
+    const ir = self.ir;
+    const op_extra = ir.instPayload(inst).op_extra;
+    const dead_bits = ir.liveness.deadBits(inst);
+    const if_else = ir.extraData(Ir.Inst.IfElse, op_extra.extra);
 
-    // TODO: liveness for condition
+    // load the list of exit phis for this statement
+    const phis = ir.extraSlice(ir.extraData(Ir.Inst.ExtraSlice, if_else.phis));
+    // and assign each to a destination register
+    const phi_assignments = try self.arena.alloc(Bytecode.Register, phis.len);
+    // TODO: is there a cleaner assign that doesn't tag the inst?
+    for (phi_assignments) |*assn| assn.* = try self.assign(undefined);
+    // defer for (phi_assignments) |assn| self.unassignRegister(assn);
+
+    // for phis that include the entry, move source data into the dest register
+    for (phis, phi_assignments) |extra, assn| {
+        const data = ir.extraData(Ir.Inst.Phi, @enumFromInt(extra));
+        const src = switch (data.semantics) {
+            .branch_if_else => continue,
+            .branch_entry_if, .branch_entry_else => self.getSlot(data.src1),
+        };
+        try self.add(.mov, .{ .dst = assn, .ops = .{ .unary = src } });
+    }
+
     const condition = self.getSlot(op_extra.op);
-    const branch = try self.reserve(.branch);
+    if (dead_bits & 0x1 != 0) self.unassign(op_extra.op);
+    const inv = try self.assign(inst);
+    try self.add(.lnot, .{ .dst = inv, .ops = .{ .unary = condition } });
+    self.unassignRegister(inv);
+    const else_branch = try self.reserve(.branch);
 
-    try self.generateBlock(if_else.exec_false);
-    const target: u32 = @intCast(self.code.len);
+    // generate the "if" block and its phis
     try self.generateBlock(if_else.exec_true);
-    self.update(branch, .{
+    for (phis, phi_assignments) |extra, assn| {
+        const data = ir.extraData(Ir.Inst.Phi, @enumFromInt(extra));
+        const src = switch (data.semantics) {
+            .branch_if_else => self.getSlot(data.src1),
+            .branch_entry_if => self.getSlot(data.src2),
+            .branch_entry_else => continue,
+        };
+        try self.add(.mov, .{ .dst = assn, .ops = .{ .unary = src } });
+    }
+    const exit_jump = try self.reserve(.jump);
+
+    const else_target: u32 = @intCast(self.code.len);
+    // now that we know the layout, go back and patch the else branch
+    self.update(else_branch, .{
         .dst = undefined,
-        .ops = .{ .branch = .{ .condition = condition, .target = target } },
+        .ops = .{ .branch = .{ .condition = condition, .target = else_target } },
     });
+
+    // generate the "else" block and its phis
+    try self.generateBlock(if_else.exec_false);
+    for (phis, phi_assignments) |extra, assn| {
+        const data = ir.extraData(Ir.Inst.Phi, @enumFromInt(extra));
+        const src = switch (data.semantics) {
+            .branch_if_else => self.getSlot(data.src2),
+            .branch_entry_if => continue,
+            .branch_entry_else => self.getSlot(data.src2),
+        };
+        try self.add(.mov, .{ .dst = assn, .ops = .{ .unary = src } });
+    }
+    const exit_target: u32 = @intCast(self.code.len);
+    // now that we know the layout, go back and patch the else branch
+    self.update(exit_jump, .{
+        .dst = undefined,
+        .ops = .{ .target = exit_target },
+    });
+
+    // TODO: this is not a good way to solve the problem
+    var i = @intFromEnum(inst) + 1;
+    var phi_index: u32 = 0;
+    while (i < self.ir.insts.len) : (i += 1) {
+        switch (self.ir.instTag(@enumFromInt(i))) {
+            .phi => {
+                const payload = self.ir.instPayload(@enumFromInt(i));
+                if (payload.phi.op == inst) {
+                    const register = phi_assignments[phi_index];
+                    try self.active_slots.put(self.arena, @enumFromInt(i), register);
+                    // self.unassignRegister(register);
+                    phi_index += 1;
+                }
+            },
+            else => break,
+        }
+    }
 }
 
 fn phiarg(self: *Assembler, inst: Ir.Index) !void {
@@ -350,21 +422,37 @@ fn phiarg(self: *Assembler, inst: Ir.Index) !void {
 }
 
 fn phi(self: *Assembler, inst: Ir.Index) !void {
-    const binary = self.ir.instPayload(inst).binary;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-    const src1 = self.ir.instPayload(binary.l).unary;
-    const src2 = self.ir.instPayload(binary.r).unary;
-
-    const op1 = self.getSlot(src1);
-    const op2 = self.getSlot(src2);
-    if (dead_bits & 0x1 != 0) self.unassign(src1);
-    if (dead_bits & 0x2 != 0) self.unassign(src2);
-    const dst = try self.assign(inst);
-
-    const arg1 = self.inst_map.get(binary.l).?;
-    const arg2 = self.inst_map.get(binary.r).?;
-    self.update(@enumFromInt(arg1), .{ .dst = dst, .ops = .{ .unary = op1 } });
-    self.update(@enumFromInt(arg2), .{ .dst = dst, .ops = .{ .unary = op2 } });
+    _ = self;
+    _ = inst;
+    // const ir = self.ir;
+    // const payload = ir.instPayload(inst);
+    // const op = payload.phi.op;
+    // const phis = switch (ir.instTag(op)) {
+    //     .if_else => slice: {
+    //         const if_else = ir.extraData(Ir.Inst.IfElse, ir.instPayload(op).op_extra.extra);
+    //         const bounds = ir.extraData(Ir.Inst.ExtraSlice, if_else.phis);
+    //         break :slice ir.extraSlice(bounds);
+    //     },
+    //     else => unreachable,
+    // };
+    //
+    // const data = ir.extraData(Ir.Inst.Phi, @enumFromInt(phis[payload.phi.index]));
+    // try self.active_slots.put(self.arena, inst, register);
+    // const binary = self.ir.instPayload(inst).binary;
+    // const dead_bits = self.ir.liveness.deadBits(inst);
+    // const src1 = self.ir.instPayload(binary.l).unary;
+    // const src2 = self.ir.instPayload(binary.r).unary;
+    //
+    // const op1 = self.getSlot(src1);
+    // const op2 = self.getSlot(src2);
+    // if (dead_bits & 0x1 != 0) self.unassign(src1);
+    // if (dead_bits & 0x2 != 0) self.unassign(src2);
+    // const dst = try self.assign(inst);
+    //
+    // const arg1 = self.inst_map.get(binary.l).?;
+    // const arg2 = self.inst_map.get(binary.r).?;
+    // self.update(@enumFromInt(arg1), .{ .dst = dst, .ops = .{ .unary = op1 } });
+    // self.update(@enumFromInt(arg2), .{ .dst = dst, .ops = .{ .unary = op2 } });
 }
 
 fn loop(self: *Assembler, inst: Ir.Index) !void {

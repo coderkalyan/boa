@@ -115,6 +115,10 @@ pub const Block = struct {
         return b.ig.add(inst);
     }
 
+    pub inline fn reserveUnlinked(b: *Block, tag: Inst.Tag) !Ir.Index {
+        return b.ig.reserve(tag);
+    }
+
     pub fn linkInst(b: *Block, inst: Ir.Index) !void {
         return b.insts.append(b.ig.arena, inst);
     }
@@ -122,8 +126,17 @@ pub const Block = struct {
     pub fn add(b: *Block, inst: Inst) !Ir.Index {
         const index = try b.addUnlinked(inst);
         try b.linkInst(index);
-
         return index;
+    }
+
+    pub fn reserve(b: *Block, tag: Inst.Tag) !Ir.Index {
+        const index = try b.reserveUnlinked(tag);
+        try b.linkInst(index);
+        return index;
+    }
+
+    pub fn update(b: *Block, index: Ir.Index, payload: Inst.Payload) void {
+        b.ig.update(index, payload);
     }
 
     pub fn addBlock(b: *Block, inner: *Block) !Ir.ExtraIndex {

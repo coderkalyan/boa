@@ -75,7 +75,7 @@ fn entryInner(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: 
 
 inline fn next(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     // std.debug.print("stack: ", .{});
-    // for (0..4) |i| std.debug.print("r{} = {}, ", .{ i, stack[i] });
+    // for (0..4) |i| std.debug.print("r{} = {}, ", .{ i, stack[i].int });
     // std.debug.print("\n", .{});
     const handler = jump_table[@intFromEnum(tags[pc])];
     @call(.always_tail, handler, .{ pc, tags, payloads, stack });

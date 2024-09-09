@@ -322,6 +322,25 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                             const dead_r = if (dead_bits & 0x2 != 0) "!" else "";
                             try writer.print("{s}%{}, {s}%{}", .{ dead_l, l, dead_r, r });
                         },
+                        .phi => {
+                            const op = payload.phi.op;
+                            const phis = switch (ir.instTag(op)) {
+                                .if_else => slice: {
+                                    const if_else = ir.extraData(Ir.Inst.IfElse, ir.instPayload(op).op_extra.extra);
+                                    const bounds = ir.extraData(Ir.Inst.ExtraSlice, if_else.phis);
+                                    break :slice ir.extraSlice(bounds);
+                                },
+                                else => unreachable,
+                            };
+
+                            const phi = ir.extraData(Ir.Inst.Phi, @enumFromInt(phis[payload.phi.index]));
+
+                            const l = @intFromEnum(phi.src1);
+                            const dead_l = if (dead_bits & 0x1 != 0) "!" else "";
+                            const r = @intFromEnum(phi.src2);
+                            const dead_r = if (dead_bits & 0x2 != 0) "!" else "";
+                            try writer.print(".{s}, {s}%{}, {s}%{}", .{ @tagName(phi.semantics), dead_l, l, dead_r, r });
+                        },
                         .ip => try ir.pool.print(writer, payload.ip),
                         .op_extra => unreachable,
                     }

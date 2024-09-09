@@ -80,6 +80,16 @@ pub fn add(ig: *IrGen, inst: Ir.Inst) !Ir.Index {
     return @enumFromInt(len);
 }
 
+pub fn reserve(ig: *IrGen, tag: Ir.Inst.Tag) !Ir.Index {
+    const len: u32 = @intCast(ig.insts.len);
+    try ig.insts.append(ig.gpa, .{ .tag = tag, .payload = undefined });
+    return @enumFromInt(len);
+}
+
+pub fn update(ig: *IrGen, inst: Ir.Index, payload: Ir.Inst.Payload) void {
+    ig.insts.items(.payload)[@intFromEnum(inst)] = payload;
+}
+
 pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.Index) !Ir {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -283,6 +293,8 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
         while (else_it.next()) |local| try union_locals.put(b.ig.arena, local.key_ptr.*, {});
     }
 
+    const inst = try b.reserve(.if_else);
+
     const scratch_top = b.ig.scratch.items.len;
     defer b.ig.scratch.shrinkRetainingCapacity(scratch_top);
     var it = union_locals.iterator();
@@ -328,6 +340,12 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
         };
 
         try b.ig.scratch.append(b.ig.arena, @intFromEnum(phi));
+
+        const phi_inst = try b.add(.{
+            .tag = .phi,
+            .payload = .{ .phi = .{ .op = inst, .index = phi_index } },
+        });
+        try b.vars.put(b.ig.arena, ident, phi_inst);
     }
 
     // var inner_vars_true: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
@@ -336,7 +354,7 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     // const exec_false = try blockIfStatement(b, scope, exec.exec_false, &inner_vars_false);
 
     const phis = b.ig.scratch.items[scratch_top..];
-    const inst = try b.add(.{ .tag = .if_else, .payload = .{
+    b.update(inst, .{
         .op_extra = .{
             .op = cond,
             .extra = try addExtra(b.ig, Inst.IfElse{
@@ -345,15 +363,11 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
                 .phis = try b.ig.addSlice(phis),
             }),
         },
-    } });
+    });
 
-    for (phis) |phi| {
-        const phi_inst = try b.add(.{
-            .tag = .phi,
-            .payload = .{ .extra_index = .{ .extra = phi, .index = phi_index } },
-        });
-        try b.vars.put(b.ig.arena, ident, phi_inst);
-    }
+    // for (phis) |phi| {
+    //     const ident = b.ig.getTempIr().extraData(Inst.Phi, phi).ident;
+    // }
 
     // TODO: support maybe undef types (once unions are in place)
     // try b.vars.ensureUnusedCapacity(
