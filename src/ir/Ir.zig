@@ -101,8 +101,8 @@ pub const Inst = struct {
         // dealloc,
 
         // if else
-        // .op_extra = condition inst and BranchDouble extra
-        branch_double,
+        // .op_extra = condition inst and IfElse extra
+        if_else,
         // loop while condition
         loop,
 
@@ -124,6 +124,10 @@ pub const Inst = struct {
         op_extra: struct {
             op: Index,
             extra: ExtraIndex,
+        },
+        extra_index: struct {
+            extra: ExtraIndex,
+            index: u32,
         },
 
         comptime {
@@ -148,9 +152,22 @@ pub const Inst = struct {
         end: ExtraIndex,
     };
 
-    pub const BranchDouble = struct {
+    pub const Phi = struct {
+        semantics: Semantics,
+        src1: Index,
+        src2: Index,
+
+        pub const Semantics = enum(u32) {
+            branch_if_else,
+            branch_entry_if,
+            branch_entry_else,
+        };
+    };
+
+    pub const IfElse = struct {
         exec_true: ExtraIndex,
         exec_false: ExtraIndex,
+        phis: ExtraIndex,
     };
 
     pub const Loop = struct {
@@ -202,10 +219,12 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .ret => ir.typeOf(payload.unary),
         // TODO: confirm, but we shouldn't use result of if
         // this may change when adding phi insts
-        .branch_double, .loop => unreachable,
+        .if_else, .loop => unreachable,
         .phiarg => ir.typeOf(payload.unary),
         // TODO: union the types
-        .phi => ir.typeOf(payload.binary.l),
+        .phi => {
+            const phi = payload.extra_index;
+        },
     };
 }
 
@@ -241,7 +260,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .phi,
         => .binary,
         .ret => .unary,
-        .branch_double, .loop => .op_extra,
+        .if_else, .loop => .op_extra,
     };
 }
 

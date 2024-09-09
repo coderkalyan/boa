@@ -166,7 +166,7 @@ fn block(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Extra
     return b.addBlock(&inner);
 }
 
-fn blockInner(b: *Block, scope: *Scope, node: Node.Index) !void {
+fn blockInner(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
     const data = b.tree.data(node).block;
 
     const sl = b.tree.extraData(data.stmts, Node.ExtraSlice);
@@ -181,7 +181,7 @@ fn blockLocals(
     b: *Block,
     scope: *Scope,
     node: Node.Index,
-    locals: *std.ArrayListUnmanaged(InternPool.Index),
+    locals: *std.AutoHashMapUnmanaged(InternPool.Index, void),
 ) !void {
     _ = scope;
     const data = b.tree.data(node).block;
@@ -196,7 +196,7 @@ fn blockLocals(
                 const ident_token = b.tree.mainToken(assign.ptr);
                 const ident_str = b.tree.tokenString(ident_token);
                 const id = try b.ig.pool.put(.{ .str = ident_str });
-                try locals.append(b.ig.arena, id);
+                try locals.put(b.ig.arena, id, {});
             },
             else => {},
         }
@@ -228,68 +228,151 @@ fn assignSimple(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     return val;
 }
 
-fn blockIfStatement(
-    b: *Block,
-    scope: *Scope,
-    node: Node.Index,
-    export_vars: *std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index),
-) error{OutOfMemory}!Ir.ExtraIndex {
-    var inner = Block.init(b.ig, scope);
-    defer inner.deinit();
-
-    // first, process the block like normal
-    try blockInner(&inner, &inner.base, node);
-    // for if statements, add `phiarg` nodes for all local vars and pass
-    // them to the parent scope
-    try export_vars.ensureUnusedCapacity(b.ig.arena, inner.vars.count());
-    var iterator = inner.vars.iterator();
-    while (iterator.next()) |entry| {
-        const arg = try inner.add(.{ .tag = .phiarg, .payload = .{ .unary = entry.value_ptr.* } });
-        export_vars.putAssumeCapacity(entry.key_ptr.*, arg);
-    }
-
-    // now seal and return the block
-    return b.addBlock(&inner);
-}
+// fn blockIfStatement(
+//     b: *Block,
+//     scope: *Scope,
+//     node: Node.Index,
+//     union_locals: *std.AutoHashMapUnmanaged(InternPool.Index, void),
+// ) error{OutOfMemory}!Ir.ExtraIndex {
+//     var inner = Block.init(b.ig, scope);
+//     defer inner.deinit();
+//
+//     // process the block
+//     try blockInner(&inner, &inner.base, node);
+//     // for if statements, add `phiarg` nodes for all local vars and pass
+//     // them to the parent scope
+//     try export_vars.ensureUnusedCapacity(b.ig.arena, inner.vars.count());
+//     var iterator = inner.vars.iterator();
+//     while (iterator.next()) |entry| {
+//         const arg = try inner.add(.{ .tag = .phiarg, .payload = .{ .unary = entry.value_ptr.* } });
+//         export_vars.putAssumeCapacity(entry.key_ptr.*, arg);
+//     }
+//
+//     // now seal and return the block
+//     return b.addBlock(&inner);
+// }
 
 fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const if_else = b.tree.data(node).if_else;
     const exec = b.tree.extraData(if_else.exec, Node.IfElse);
 
     const cond = try valExpr(b, scope, if_else.condition);
-    var inner_vars_true: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
-    const exec_true = try blockIfStatement(b, scope, exec.exec_true, &inner_vars_true);
-    var inner_vars_false: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
-    const exec_false = try blockIfStatement(b, scope, exec.exec_false, &inner_vars_false);
 
-    const branch_double = try b.add(.{ .tag = .branch_double, .payload = .{
+    var inner_true = Block.init(b.ig, scope);
+    defer inner_true.deinit();
+    try blockInner(&inner_true, &inner_true.base, exec.exec_true);
+    const exec_true = try b.addBlock(&inner_true);
+
+    var inner_false = Block.init(b.ig, scope);
+    defer inner_false.deinit();
+    try blockInner(&inner_false, &inner_false.base, exec.exec_false);
+    const exec_false = try b.addBlock(&inner_false);
+
+    var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+    {
+        // var if_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+        // try blockLocals(b, scope, exec.exec_true, &if_locals);
+        // var else_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+        // try blockLocals(b, scope, exec.exec_true, &else_locals);
+        //
+        var parent_it = b.vars.iterator();
+        while (parent_it.next()) |local| try union_locals.put(b.ig.arena, local.key_ptr.*, {});
+        var if_it = inner_true.vars.iterator();
+        while (if_it.next()) |local| try union_locals.put(b.ig.arena, local.key_ptr.*, {});
+        var else_it = inner_false.vars.iterator();
+        while (else_it.next()) |local| try union_locals.put(b.ig.arena, local.key_ptr.*, {});
+    }
+
+    const scratch_top = b.ig.scratch.items.len;
+    defer b.ig.scratch.shrinkRetainingCapacity(scratch_top);
+    var it = union_locals.iterator();
+    var phi_index: u32 = 0;
+    while (it.next()) |entry| : (phi_index += 1) {
+        const ident = entry.key_ptr.*;
+        const live_parent = b.vars.contains(ident);
+        const live_if = inner_true.vars.contains(ident);
+        const live_else = inner_false.vars.contains(ident);
+
+        // if variable not mutated inside the if statement, nothing to merge
+        if (!live_if and !live_else) continue;
+
+        const phi = if (live_if) phi: {
+            // three posibilities to merge:
+            // 1) defined in if and else -> merge two children (overwrites parent)
+            // 2) defined in if and parent -> merge child and parent
+            // 3) defined only in if -> merge with undef
+            if (live_else) {
+                break :phi try b.ig.addExtra(Inst.Phi{
+                    .semantics = .branch_if_else,
+                    .src1 = inner_true.vars.get(ident).?,
+                    .src2 = inner_false.vars.get(ident).?,
+                });
+            } else if (live_parent) {
+                break :phi try b.ig.addExtra(Inst.Phi{
+                    .semantics = .branch_entry_if,
+                    .src1 = b.vars.get(ident).?,
+                    .src2 = inner_true.vars.get(ident).?,
+                });
+            } else unreachable; // TODO: implement this
+        } else phi: {
+            // two posibilities to merge:
+            // 1) defined in else and parent -> merge child and parent
+            // 2) defined only in else -> merge with undef
+            if (live_parent) {
+                break :phi try b.ig.addExtra(Inst.Phi{
+                    .semantics = .branch_entry_else,
+                    .src1 = b.vars.get(ident).?,
+                    .src2 = inner_false.vars.get(ident).?,
+                });
+            } else unreachable; // TODO: implement this
+        };
+
+        try b.ig.scratch.append(b.ig.arena, @intFromEnum(phi));
+    }
+
+    // var inner_vars_true: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
+    // const exec_true = try blockIfStatement(b, scope, exec.exec_true, &inner_vars_true);
+    // var inner_vars_false: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index) = .{};
+    // const exec_false = try blockIfStatement(b, scope, exec.exec_false, &inner_vars_false);
+
+    const phis = b.ig.scratch.items[scratch_top..];
+    const inst = try b.add(.{ .tag = .if_else, .payload = .{
         .op_extra = .{
             .op = cond,
-            .extra = try addExtra(b.ig, Inst.BranchDouble{
+            .extra = try addExtra(b.ig, Inst.IfElse{
                 .exec_true = exec_true,
                 .exec_false = exec_false,
+                .phis = try b.ig.addSlice(phis),
             }),
         },
     } });
 
-    // TODO: support maybe undef types (once unions are in place)
-    try b.vars.ensureUnusedCapacity(
-        b.ig.arena,
-        @max(inner_vars_true.count(), inner_vars_false.count()),
-    );
-    var iterator = inner_vars_true.iterator();
-    while (iterator.next()) |entry| {
-        const id = entry.key_ptr.*;
-        const arg_true = entry.value_ptr.*;
-        if (inner_vars_false.get(id)) |arg_false| {
-            const phi = try b.add(.{ .tag = .phi, .payload = .{
-                .binary = .{ .l = arg_true, .r = arg_false },
-            } });
-            b.vars.putAssumeCapacity(id, phi);
-        }
+    for (phis) |phi| {
+        const phi_inst = try b.add(.{
+            .tag = .phi,
+            .payload = .{ .extra_index = .{ .extra = phi, .index = phi_index } },
+        });
+        try b.vars.put(b.ig.arena, ident, phi_inst);
     }
 
-    return branch_double;
+    // TODO: support maybe undef types (once unions are in place)
+    // try b.vars.ensureUnusedCapacity(
+    //     b.ig.arena,
+    //     @max(inner_vars_true.count(), inner_vars_false.count()),
+    // );
+    // var iterator = inner_vars_true.iterator();
+    // while (iterator.next()) |entry| {
+    //     const id = entry.key_ptr.*;
+    //     const arg_true = entry.value_ptr.*;
+    //     if (inner_vars_false.get(id)) |arg_false| {
+    //         const phi = try b.add(.{ .tag = .phi, .payload = .{
+    //             .binary = .{ .l = arg_true, .r = arg_false },
+    //         } });
+    //         b.vars.putAssumeCapacity(id, phi);
+    //     }
+    // }
+
+    return inst;
 }
 
 fn blockLoop(
@@ -301,8 +384,8 @@ fn blockLoop(
     defer inner.deinit();
 
     // first, scan through the block and list the locals that are assigned inside
-    var inner_locals: std.ArrayListUnmanaged(InternPool.Index) = .{};
-    try blockLocals(b, scope, node, &inner_locals);
+    const inner_locals: std.ArrayListUnmanaged(InternPool.Index) = .{};
+    // try blockLocals(b, scope, node, &inner_locals);
     // and keep only the locals that already exist in the parent scope, since they
     // need phi logic
     var phi_locals: std.ArrayListUnmanaged(struct {

@@ -124,7 +124,7 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             //     try analysis.live_set.put(arena, payload.binary.r, {});
             // },
             // TODO: what to do here?
-            .branch_double => if (!analysis.live_set.contains(payload.op_extra.op)) {
+            .if_else => if (!analysis.live_set.contains(payload.op_extra.op)) {
                 bits |= 0x1;
                 try analysis.live_set.put(arena, payload.op_extra.op, {});
             },

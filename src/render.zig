@@ -269,9 +269,9 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
             const tag = ir.insts.items(.tag)[index];
             const payload = ir.insts.items(.payload)[index];
             switch (tag) {
-                .branch_double => {
+                .if_else => {
                     const cond = payload.op_extra.op;
-                    const exec = ir.extraData(Ir.Inst.BranchDouble, payload.op_extra.extra);
+                    const exec = ir.extraData(Ir.Inst.IfElse, payload.op_extra.extra);
                     try writer.print("if_else(%{}, true = {{", .{@intFromEnum(cond)});
                     self.stream.indent();
                     try self.stream.newline();

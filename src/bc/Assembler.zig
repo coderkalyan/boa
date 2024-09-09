@@ -93,14 +93,14 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         .lor => try self.lor(inst),
         .land => try self.land(inst),
         .ret => unreachable, // TODO: implement
-        .branch_double => try self.branchDouble(inst),
+        .if_else => try self.ifElse(inst),
         .phiarg => try self.phiarg(inst),
         .phi => try self.phi(inst),
         .loop => try self.loop(inst),
     }
 
     switch (ir.insts.items(.tag)[index]) {
-        .branch_double, .loop => {},
+        .if_else, .loop => {},
         else => if (dead_bits & 0x8 != 0) self.unassign(inst),
     }
 }
@@ -327,17 +327,17 @@ fn land(self: *Assembler, inst: Ir.Index) !void {
     });
 }
 
-fn branchDouble(self: *Assembler, inst: Ir.Index) !void {
+fn ifElse(self: *Assembler, inst: Ir.Index) !void {
     const op_extra = self.ir.instPayload(inst).op_extra;
-    const branch_double = self.ir.extraData(Ir.Inst.BranchDouble, op_extra.extra);
+    const if_else = self.ir.extraData(Ir.Inst.IfElse, op_extra.extra);
 
     // TODO: liveness for condition
     const condition = self.getSlot(op_extra.op);
     const branch = try self.reserve(.branch);
 
-    try self.generateBlock(branch_double.exec_false);
+    try self.generateBlock(if_else.exec_false);
     const target: u32 = @intCast(self.code.len);
-    try self.generateBlock(branch_double.exec_true);
+    try self.generateBlock(if_else.exec_true);
     self.update(branch, .{
         .dst = undefined,
         .ops = .{ .branch = .{ .condition = condition, .target = target } },
