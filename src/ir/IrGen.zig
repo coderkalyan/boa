@@ -177,6 +177,32 @@ fn blockInner(b: *Block, scope: *Scope, node: Node.Index) !void {
     }
 }
 
+fn blockLocals(
+    b: *Block,
+    scope: *Scope,
+    node: Node.Index,
+    locals: *std.ArrayListUnmanaged(InternPool.Index),
+) !void {
+    _ = scope;
+    const data = b.tree.data(node).block;
+
+    const sl = b.tree.extraData(data.stmts, Node.ExtraSlice);
+    const stmts = b.tree.extraSlice(sl);
+
+    for (stmts) |stmt| {
+        switch (b.tree.data(stmt)) {
+            .assign_simple => {
+                const assign = b.tree.data(stmt).assign_simple;
+                const ident_token = b.tree.mainToken(assign.ptr);
+                const ident_str = b.tree.tokenString(ident_token);
+                const id = try b.ig.pool.put(.{ .str = ident_str });
+                try locals.append(b.ig.arena, id);
+            },
+            else => {},
+        }
+    }
+}
+
 fn statement(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const tag = b.tree.data(node);
 
@@ -266,13 +292,84 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     return branch_double;
 }
 
+fn blockLoop(
+    b: *Block,
+    scope: *Scope,
+    node: Node.Index,
+) error{OutOfMemory}!Ir.ExtraIndex {
+    var inner = Block.init(b.ig, scope);
+    defer inner.deinit();
+
+    // first, scan through the block and list the locals that are assigned inside
+    var inner_locals: std.ArrayListUnmanaged(InternPool.Index) = .{};
+    try blockLocals(b, scope, node, &inner_locals);
+    // and keep only the locals that already exist in the parent scope, since they
+    // need phi logic
+    var phi_locals: std.ArrayListUnmanaged(struct {
+        id: InternPool.Index,
+        parent_arg: Ir.Index,
+        body_arg: Ir.Index,
+        phi: Ir.Index,
+    }) = .{};
+    try phi_locals.ensureUnusedCapacity(b.ig.arena, inner_locals.items.len);
+    for (inner_locals.items) |id| {
+        if (b.vars.contains(id)) phi_locals.appendAssumeCapacity(.{
+            .id = id,
+            .parent_arg = undefined,
+            .body_arg = undefined,
+            .phi = undefined,
+        });
+    }
+
+    // add phiargs for the parent outside the loop body
+    for (phi_locals.items) |*local| {
+        const parent_def = b.vars.get(local.id).?;
+        local.parent_arg = try b.add(.{ .tag = .phiarg, .payload = .{ .unary = parent_def } });
+    }
+    // and phis at the top of the loop body (don't know the other arg yet)
+    for (phi_locals.items) |*local| {
+        local.phi = try inner.add(.{
+            .tag = .phi,
+            .payload = .{ .binary = .{ .l = local.parent_arg, .r = undefined } },
+        });
+    }
+    // then, process the block like normal
+    try blockInner(&inner, &inner.base, node);
+    // finally, add phiargs for the loop body and update the phis
+    for (phi_locals.items) |*local| {
+        const local_def = inner.vars.get(local.id).?;
+        local.body_arg = try inner.add(.{ .tag = .phiarg, .payload = .{ .unary = local_def } });
+        b.ig.insts.items(.payload)[@intFromEnum(local.phi)].binary.r = local.body_arg;
+    }
+    // var iterator = inner_locals.iterator();
+    // while (iterator.next()) |entry| {
+    //     const id = entry.key_ptr.*;
+    //     if (b.vars.get(id)) |parent_def| {
+    //         const parent_arg = try b.add(.{ .tag = .phiarg, .payload = .{ .unary = parent_def } });
+    //         _ = parent_arg;
+    //     }
+    // }
+
+    // for if statements, add `phiarg` nodes for all local vars and pass
+    // them to the parent scope
+    // try export_vars.ensureUnusedCapacity(b.ig.arena, inner.vars.count());
+    // var iterator = inner.vars.iterator();
+    // while (iterator.next()) |entry| {
+    //     const arg = try inner.add(.{ .tag = .phiarg, .payload = .{ .unary = entry.value_ptr.* } });
+    //     export_vars.putAssumeCapacity(entry.key_ptr.*, arg);
+    // }
+
+    // now seal and return the block
+    return b.addBlock(&inner);
+}
+
 fn whileLoop(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const while_loop = b.tree.data(node).while_loop;
 
     var inner = Block.init(b.ig, scope);
     defer inner.deinit();
     const condition = try valExpr(&inner, &inner.base, while_loop.condition);
-    const body = try block(b, scope, while_loop.body);
+    const body = try blockLoop(b, scope, while_loop.body);
 
     const loop = try b.add(.{ .tag = .loop, .payload = .{
         .op_extra = .{

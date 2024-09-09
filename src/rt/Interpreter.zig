@@ -47,13 +47,13 @@ const jump_table: [std.meta.tags(Tag).len]Handler = .{
     ieq, // ieq
     ine, // ine
     ilt, // ilt
-    trap, // flt
+    flt, // flt
     igt, // igt
-    trap, // fgt
+    fgt, // fgt
     ile, // ile
-    trap, // fle
+    fle, // fle
     ige, // ige
-    trap, // fge
+    fge, // fge
     branch, // branch
     jump, // jump
     trap, // exit
@@ -313,11 +313,27 @@ fn ilt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot
     next(pc + 1, tags, payloads, stack);
 }
 
+fn flt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst].int = @intFromBool(stack[op1].float < stack[op2].float);
+    next(pc + 1, tags, payloads, stack);
+}
+
 fn igt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     const dst: u32 = @intFromEnum(payloads[pc].dst);
     const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
     const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
     stack[dst].int = @intFromBool(stack[op1].int > stack[op2].int);
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn fgt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst].int = @intFromBool(stack[op1].float > stack[op2].float);
     next(pc + 1, tags, payloads, stack);
 }
 
@@ -329,11 +345,27 @@ fn ile(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot
     next(pc + 1, tags, payloads, stack);
 }
 
+fn fle(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst].int = @intFromBool(stack[op1].float <= stack[op2].float);
+    next(pc + 1, tags, payloads, stack);
+}
+
 fn ige(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     const dst: u32 = @intFromEnum(payloads[pc].dst);
     const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
     const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
     stack[dst].int = @intFromBool(stack[op1].int >= stack[op2].int);
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn fge(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const dst: u32 = @intFromEnum(payloads[pc].dst);
+    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
+    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
+    stack[dst].int = @intFromBool(stack[op1].float >= stack[op2].float);
     next(pc + 1, tags, payloads, stack);
 }
 
