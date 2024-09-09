@@ -100,6 +100,8 @@ pub const Inst = struct {
 
         // jump to index if register is true (1)
         branch,
+        // unconditionally jump to index
+        jump,
         exit,
     };
 
@@ -117,6 +119,7 @@ pub const Inst = struct {
                 condition: Register,
                 target: u32,
             },
+            target: u32,
         },
 
         comptime {

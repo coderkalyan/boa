@@ -183,6 +183,7 @@ fn statement(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     return switch (tag) {
         .assign_simple => assignSimple(b, scope, node),
         .if_else => ifElse(b, scope, node),
+        .while_loop => whileLoop(b, scope, node),
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
             unreachable;
@@ -263,6 +264,44 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     }
 
     return branch_double;
+}
+
+fn whileLoop(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
+    const while_loop = b.tree.data(node).while_loop;
+
+    var inner = Block.init(b.ig, scope);
+    defer inner.deinit();
+    const condition = try valExpr(&inner, &inner.base, while_loop.condition);
+    const body = try block(b, scope, while_loop.body);
+
+    const loop = try b.add(.{ .tag = .loop, .payload = .{
+        .op_extra = .{
+            .op = condition,
+            .extra = try addExtra(b.ig, Inst.Loop{
+                .condition = try b.addBlock(&inner),
+                .body = body,
+            }),
+        },
+    } });
+
+    // TODO: support maybe undef types (once unions are in place)
+    // try b.vars.ensureUnusedCapacity(
+    //     b.ig.arena,
+    //     @max(inner_vars_true.count(), inner_vars_false.count()),
+    // );
+    // var iterator = inner_vars_true.iterator();
+    // while (iterator.next()) |entry| {
+    //     const id = entry.key_ptr.*;
+    //     const arg_true = entry.value_ptr.*;
+    //     if (inner_vars_false.get(id)) |arg_false| {
+    //         const phi = try b.add(.{ .tag = .phi, .payload = .{
+    //             .binary = .{ .l = arg_true, .r = arg_false },
+    //         } });
+    //         b.vars.putAssumeCapacity(id, phi);
+    //     }
+    // }
+
+    return loop;
 }
 
 const ResultInfo = struct {

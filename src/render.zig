@@ -287,6 +287,24 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     try writer.print("}})", .{});
                     try self.stream.newline();
                 },
+                .loop => {
+                    const cond = payload.op_extra.op;
+                    const loop = ir.extraData(Ir.Inst.Loop, payload.op_extra.extra);
+                    try writer.print("loop(%{}, condition = {{", .{@intFromEnum(cond)});
+                    self.stream.indent();
+                    try self.stream.newline();
+                    try self.renderBlock(loop.condition);
+                    self.stream.dedent();
+
+                    try writer.print("}}, body = {{", .{});
+                    self.stream.indent();
+                    try self.stream.newline();
+                    try self.renderBlock(loop.body);
+                    self.stream.dedent();
+
+                    try writer.print("}})", .{});
+                    try self.stream.newline();
+                },
                 inline else => {
                     try writer.print("{s}(", .{@tagName(tag)});
 
@@ -368,6 +386,8 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .binv,
                 .lnot,
                 .mov,
+                .itof,
+                .ftoi,
                 => {
                     const op: u32 = @intFromEnum(payload.ops.unary);
                     try writer.print("x{}, x{}\n", .{ dst, op });
@@ -375,8 +395,13 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .branch => {
                     const condition: u32 = @intFromEnum(payload.ops.branch.condition);
                     const target = payload.ops.branch.target;
-                    const offset = target - i;
+                    const offset = @as(i64, target) - i;
                     try writer.print("x{}, {} ({})\n", .{ condition, target, offset });
+                },
+                .jump => {
+                    const target = payload.ops.target;
+                    const offset = @as(i64, target) - i;
+                    try writer.print("{} ({})\n", .{ target, offset });
                 },
                 .exit => try writer.print("\n", .{}),
                 else => {

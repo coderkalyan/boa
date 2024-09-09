@@ -128,6 +128,11 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
                 bits |= 0x1;
                 try analysis.live_set.put(arena, payload.op_extra.op, {});
             },
+            // TODO: what to do here?
+            .loop => if (!analysis.live_set.contains(payload.op_extra.op)) {
+                bits |= 0x1;
+                try analysis.live_set.put(arena, payload.op_extra.op, {});
+            },
         }
 
         const elem: u8 = if (i % 2 == 0) bits else @as(u8, bits) << 4;

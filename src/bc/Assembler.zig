@@ -96,10 +96,11 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         .branch_double => try self.branchDouble(inst),
         .phiarg => try self.phiarg(inst),
         .phi => try self.phi(inst),
+        .loop => try self.loop(inst),
     }
 
     switch (ir.insts.items(.tag)[index]) {
-        .branch_double => {},
+        .branch_double, .loop => {},
         else => if (dead_bits & 0x8 != 0) self.unassign(inst),
     }
 }
@@ -364,4 +365,30 @@ fn phi(self: *Assembler, inst: Ir.Index) !void {
     const arg2 = self.inst_map.get(binary.r).?;
     self.update(@enumFromInt(arg1), .{ .dst = dst, .ops = .{ .unary = op1 } });
     self.update(@enumFromInt(arg2), .{ .dst = dst, .ops = .{ .unary = op2 } });
+}
+
+fn loop(self: *Assembler, inst: Ir.Index) !void {
+    const op_extra = self.ir.instPayload(inst).op_extra;
+    const loop_data = self.ir.extraData(Ir.Inst.Loop, op_extra.extra);
+
+    // TODO: liveness for condition
+    const jump = try self.reserve(.jump);
+    const body_target: u32 = @intCast(self.code.len);
+    try self.generateBlock(loop_data.body);
+    const condition_target: u32 = @intCast(self.code.len);
+    try self.generateBlock(loop_data.condition);
+    const condition = self.getSlot(op_extra.op);
+    try self.add(.branch, .{
+        .dst = undefined,
+        .ops = .{
+            .branch = .{
+                .condition = condition,
+                .target = body_target,
+            },
+        },
+    });
+    self.update(jump, .{
+        .dst = undefined,
+        .ops = .{ .target = condition_target },
+    });
 }

@@ -103,6 +103,8 @@ pub const Inst = struct {
         // if else
         // .op_extra = condition inst and BranchDouble extra
         branch_double,
+        // loop while condition
+        loop,
 
         phiarg,
         phi,
@@ -150,6 +152,11 @@ pub const Inst = struct {
         exec_true: ExtraIndex,
         exec_false: ExtraIndex,
     };
+
+    pub const Loop = struct {
+        condition: ExtraIndex,
+        body: ExtraIndex,
+    };
 };
 
 pub fn extraData(ir: *const Ir, comptime T: type, index: ExtraIndex) T {
@@ -195,7 +202,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .ret => ir.typeOf(payload.unary),
         // TODO: confirm, but we shouldn't use result of if
         // this may change when adding phi insts
-        .branch_double => unreachable,
+        .branch_double, .loop => unreachable,
         .phiarg => ir.typeOf(payload.unary),
         // TODO: union the types
         .phi => ir.typeOf(payload.binary.l),
@@ -234,7 +241,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .phi,
         => .binary,
         .ret => .unary,
-        .branch_double => .op_extra,
+        .branch_double, .loop => .op_extra,
     };
 }
 

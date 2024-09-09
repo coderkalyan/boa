@@ -55,6 +55,7 @@ const jump_table: [std.meta.tags(Tag).len]Handler = .{
     ige, // ige
     trap, // fge
     branch, // branch
+    jump, // jump
     trap, // exit
 };
 
@@ -340,6 +341,11 @@ fn branch(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]S
     const condition: u32 = @intFromEnum(payloads[pc].ops.branch.condition);
     const branch_target: u32 = payloads[pc].ops.branch.target;
     const target = if (stack[condition].int == 1) branch_target else pc + 1;
+    next(target, tags, payloads, stack);
+}
+
+fn jump(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const target: u32 = payloads[pc].ops.target;
     next(target, tags, payloads, stack);
 }
 
