@@ -23,16 +23,20 @@ pub fn deadBits(liveness: *const Liveness, inst: Ir.Index) u4 {
 
 const Analysis = struct {
     gpa: Allocator,
+    arena: Allocator,
+    ir: *const Ir,
     dead: []u8,
     live_set: std.AutoHashMapUnmanaged(Ir.Index, void),
 
-    pub fn init(gpa: Allocator, inst_count: u32) !Analysis {
-        const dead = try gpa.alloc(u8, inst_count);
+    pub fn init(gpa: Allocator, arena: Allocator, ir: *const Ir) !Analysis {
+        const dead = try gpa.alloc(u8, ir.insts.len);
         errdefer gpa.free(dead);
 
         @memset(dead, 0);
         return .{
             .gpa = gpa,
+            .arena = arena,
+            .ir = ir,
             .dead = dead,
             .live_set = .{},
         };
@@ -41,31 +45,39 @@ const Analysis = struct {
     pub fn deinit(self: *Analysis) void {
         self.gpa.free(self.dead);
     }
-};
 
-pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
-    var arena_allocator = std.heap.ArenaAllocator.init(gpa);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
+    fn analyzeBlock(analysis: *Analysis, index: Ir.ExtraIndex) Allocator.Error!void {
+        const ir = analysis.ir;
 
-    const insts = temp_ir.insts;
-    var analysis = try Analysis.init(gpa, @intCast(insts.len));
-    errdefer analysis.deinit();
-
-    // TODO: we need to consider instructions in the right order,
-    // rather than just blindly iterating through the temp_ir
-    // but to hack things for now, pretend phi_entry_body_bodys
-    // never die
-    for (0..insts.len) |i| {
-        const inst: Ir.Index = @enumFromInt(i);
-        const tag = temp_ir.instTag(inst);
-        if (tag == .phi_entry_body_body) try analysis.live_set.put(arena, inst, {});
+        const block = ir.extraData(Ir.Inst.ExtraSlice, index);
+        const insts = ir.extraSlice(block);
+        var i: u32 = @intCast(insts.len);
+        while (i > 0) {
+            i -= 1;
+            const inst: Ir.Index = @enumFromInt(insts[i]);
+            try analysis.analyzeInst(inst);
+        }
     }
 
-    var i: u32 = @intCast(insts.len);
-    while (i > 0) {
-        i -= 1;
-        const inst: Ir.Index = @enumFromInt(i);
+    fn markLive(
+        analysis: *Analysis,
+        comptime num_operands: u32,
+        operands: *const [num_operands]Ir.Index,
+    ) !u4 {
+        std.debug.assert(num_operands <= 2);
+        var bits: u4 = 0;
+        inline for (operands, 0..) |operand, i| {
+            if (!analysis.live_set.contains(operand)) {
+                bits |= 1 << i;
+                try analysis.live_set.put(analysis.arena, operand, {});
+            }
+        }
+
+        return bits;
+    }
+
+    fn analyzeInst(analysis: *Analysis, inst: Ir.Index) !void {
+        const ir = analysis.ir;
         var bits: u4 = 0x0;
 
         // instruction is unused, since it is defined here
@@ -79,23 +91,20 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
         // based on the number of operands the instruction has,
         // check each of them against the live set, and if they
         // don't exist, add them and mark the "dead" bit
-        const tag = temp_ir.instTag(inst);
-        const payload = temp_ir.instPayload(inst);
+        const tag = ir.instTag(inst);
+        const payload = ir.instPayload(inst);
         switch (tag) {
+            // zero operands
             .constant => {},
-            // TODO: think about how to handle these
-            // .alloc, .dealloc => {},
+            // unary (one operand)
             .itof,
             .ftoi,
             .neg,
             .binv,
             .lnot,
-            // .load,
             .ret,
-            => if (!analysis.live_set.contains(payload.unary)) {
-                bits |= 0x1;
-                try analysis.live_set.put(arena, payload.unary, {});
-            },
+            => bits |= try analysis.markLive(1, &.{payload.unary}),
+            // binary (two operands)
             .add,
             .sub,
             .mul,
@@ -120,37 +129,45 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             .phi_entry_else,
             .phi_entry_body_body,
             .phi_entry_body_exit,
-            => {
-                if (!analysis.live_set.contains(payload.binary.l)) {
-                    bits |= 0x1;
-                    try analysis.live_set.put(arena, payload.binary.l, {});
-                }
-
-                if (!analysis.live_set.contains(payload.binary.r)) {
-                    bits |= 0x2;
-                    try analysis.live_set.put(arena, payload.binary.r, {});
-                }
-            },
-            // TODO: is this correct?
-            // .store => if (!analysis.live_set.contains(payload.binary.r)) {
-            //     bits |= 0x2;
-            //     try analysis.live_set.put(arena, payload.binary.r, {});
-            // },
-            // TODO: what to do here?
-            .if_else => if (!analysis.live_set.contains(payload.op_extra.op)) {
-                bits |= 0x1;
-                try analysis.live_set.put(arena, payload.op_extra.op, {});
+            => bits |= try analysis.markLive(2, &.{ payload.binary.l, payload.binary.r }),
+            .if_else => {
+                // check if the condition dies
+                bits |= try analysis.markLive(1, &.{payload.op_extra.op});
+                try analysis.analyzeBlock(payload.op_extra.extra);
             },
             // TODO: what to do here?
-            .loop => if (!analysis.live_set.contains(payload.op_extra.op)) {
-                bits |= 0x1;
-                try analysis.live_set.put(arena, payload.op_extra.op, {});
+            .loop => {
+                const loop = ir.extraData(Ir.Inst.Loop, payload.op_extra.extra);
+                bits |= try analysis.markLive(1, &.{payload.op_extra.op});
+                try analysis.analyzeBlock(loop.condition);
+                try analysis.analyzeBlock(loop.body);
+                try analysis.analyzeBlock(loop.phi_block);
             },
         }
 
-        const elem: u8 = if (i % 2 == 0) bits else @as(u8, bits) << 4;
-        analysis.dead[i / 2] |= elem;
+        const elem: u8 = if (@intFromEnum(inst) % 2 == 0) bits else @as(u8, bits) << 4;
+        analysis.dead[@intFromEnum(inst) / 2] |= elem;
     }
+};
+
+pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
+    var arena_allocator = std.heap.ArenaAllocator.init(gpa);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    var analysis = try Analysis.init(gpa, arena, temp_ir);
+    errdefer analysis.deinit();
+
+    // TODO: we need to consider instructions in the right order,
+    // rather than just blindly iterating through the temp_ir
+    // but to hack things for now, pretend phi_entry_body_bodys
+    // never die
+    // for (0..insts.len) |i| {
+    //     const inst: Ir.Index = @enumFromInt(i);
+    //     const tag = temp_ir.instTag(inst);
+    //     if (tag == .phi_entry_body_body) try analysis.live_set.put(arena, inst, {});
+    // }
+    try analysis.analyzeBlock(temp_ir.block);
 
     return .{
         .dead = analysis.dead,

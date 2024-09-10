@@ -130,16 +130,18 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     //     }
     // }
     // for (module)
-    const liveness = try Liveness.analyze(gpa, &ig.getTempIr());
-
-    return .{
+    var ir: Ir = .{
         .pool = pool,
         .tree = tree,
         .insts = ig.insts.toOwnedSlice(),
         .extra = try ig.extra.toOwnedSlice(gpa),
         .block = block_index,
-        .liveness = liveness,
+        .liveness = undefined,
     };
+
+    const liveness = try Liveness.analyze(gpa, &ir);
+    ir.liveness = liveness;
+    return ir;
 }
 
 // fn declareSlots(ig: *IrGen, func: *Scope.Function, node: Node.Index) !void {
