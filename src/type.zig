@@ -3,12 +3,14 @@ const InternPool = @import("InternPool.zig");
 
 const Allocator = std.mem.Allocator;
 const Item = InternPool.Item;
+const asBytes = std.mem.asBytes;
 
 pub const Type = union(enum) {
     nonetype: void,
     int: void,
     float: void,
     bool: void,
+    @"union": []const InternPool.Index,
 
     pub const Tag = std.meta.Tag(Type);
 
@@ -16,26 +18,30 @@ pub const Type = union(enum) {
     // storage. Extra serialization storage is available via
     // the .extra and .wide arrays owned by the pool.
     pub fn serialize(ty: Type, pool: *InternPool) !Item {
-        _ = pool;
-
         return switch (ty) {
             .nonetype => .{ .tag = .nonetype_ty, .payload = .{ .placeholder = {} } },
             .int => .{ .tag = .int_ty, .payload = .{ .placeholder = {} } },
             .float => .{ .tag = .float_ty, .payload = .{ .placeholder = {} } },
             .bool => .{ .tag = .bool_ty, .payload = .{ .placeholder = {} } },
+            .@"union" => |types| {
+                const slice = try pool.addSlice(@ptrCast(types));
+                return .{ .tag = .union_ty, .payload = .{ .extra = slice } };
+            },
         };
     }
 
     // converts an InternPool.Item back into a Type. It is invalid
     // to call this function on an Item that is not a Type.
     pub fn deserialize(item: Item, pool: *const InternPool) Type {
-        _ = pool;
-
         return switch (item.tag) {
             .nonetype_ty => .{ .nonetype = {} },
             .int_ty => .{ .int = {} },
             .float_ty => .{ .float = {} },
             .bool_ty => .{ .bool = {} },
+            .union_ty => {
+                const slice = pool.extraData(item.payload.extra, Item.ExtraSlice);
+                return .{ .@"union" = @ptrCast(pool.extraSlice(slice)) };
+            },
             else => unreachable,
         };
     }
@@ -51,6 +57,7 @@ pub const Type = union(enum) {
             .float,
             .bool,
             => {},
+            .@"union" => |types| hasher.update(asBytes(types)),
         }
 
         return hasher.final();

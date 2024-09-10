@@ -94,6 +94,7 @@ pub const Item = struct {
         int_ty,
         float_ty,
         bool_ty,
+        union_ty,
         none_tv,
         int_tv,
         float_tv,
@@ -119,6 +120,11 @@ pub const Item = struct {
                 std.debug.assert(@sizeOf(Payload) <= 4);
             }
         }
+    };
+
+    pub const ExtraSlice = struct {
+        start: ExtraIndex,
+        end: ExtraIndex,
     };
 };
 
@@ -209,6 +215,50 @@ pub fn deinit(pool: *InternPool) void {
     pool.string_table.deinit(gpa);
 }
 
+fn addExtra(pool: *InternPool, extra: anytype) !ExtraIndex {
+    const fields = std.meta.fields(@TypeOf(extra));
+    try pool.extra.ensureUnusedCapacity(pool.gpa, fields.len);
+    const len: u32 = @intCast(pool.extra.items.len);
+    inline for (fields) |field| {
+        switch (field.type) {
+            inline else => {
+                const num: u32 = @intFromEnum(@field(extra, field.name));
+                pool.extra.appendAssumeCapacity(@bitCast(num));
+            },
+        }
+    }
+
+    return @enumFromInt(len);
+}
+
+pub fn extraData(pool: *const InternPool, index: ExtraIndex, comptime T: type) T {
+    const fields = std.meta.fields(T);
+    var result: T = undefined;
+    const base: u32 = @intFromEnum(index);
+    inline for (fields, 0..) |field, i| {
+        switch (field.type) {
+            inline else => @field(result, field.name) = @enumFromInt(pool.extra.items[base + i]),
+        }
+    }
+    return result;
+}
+
+pub fn addSlice(pool: *InternPool, sl: []const u32) !ExtraIndex {
+    const start: u32 = @intCast(pool.extra.items.len);
+    try pool.extra.appendSlice(pool.gpa, sl);
+    const end: u32 = @intCast(pool.extra.items.len);
+    return pool.addExtra(Item.ExtraSlice{
+        .start = @enumFromInt(start),
+        .end = @enumFromInt(end),
+    });
+}
+
+pub fn extraSlice(pool: *const InternPool, sl: Item.ExtraSlice) []const u32 {
+    const start: u32 = @intFromEnum(sl.start);
+    const end: u32 = @intFromEnum(sl.end);
+    return pool.extra.items[start..end];
+}
+
 pub fn put(pool: *InternPool, key: Key) !Index {
     const adapter: Key.Adapter = .{ .pool = pool };
     const gop = try pool.map.getOrPutAdapted(pool.gpa, key, adapter);
@@ -232,6 +282,7 @@ pub fn get(pool: *const InternPool, _index: Index) Key {
         .int_ty,
         .float_ty,
         .bool_ty,
+        .union_ty,
         => .{ .ty = Type.deserialize(item, pool) },
         .none_tv,
         .int_tv,
