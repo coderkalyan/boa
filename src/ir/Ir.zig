@@ -106,8 +106,12 @@ pub const Inst = struct {
         // loop while condition
         loop,
 
-        phiarg,
-        phi,
+        // phi between if and else clauses
+        phi_if_else,
+        // phi between entry and if clause
+        phi_entry_if,
+        // phi between entry and else clause
+        phi_entry_else,
     };
 
     pub const Payload = union {
@@ -129,10 +133,6 @@ pub const Inst = struct {
             extra: ExtraIndex,
             index: u32,
         },
-        phi: struct {
-            op: Index,
-            index: u32,
-        },
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -148,7 +148,6 @@ pub const Inst = struct {
             unary,
             binary,
             op_extra,
-            phi,
         };
     };
 
@@ -225,22 +224,11 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         // TODO: confirm, but we shouldn't use result of if
         // this may change when adding phi insts
         .if_else, .loop => unreachable,
-        .phiarg => ir.typeOf(payload.unary),
+        .phi_if_else,
+        .phi_entry_if,
+        .phi_entry_else,
         // TODO: union the types
-        .phi => {
-            const op = payload.phi.op;
-            const phis = switch (ir.instTag(op)) {
-                .if_else => slice: {
-                    const if_else = ir.extraData(Inst.IfElse, ir.instPayload(op).op_extra.extra);
-                    const bounds = ir.extraData(Inst.ExtraSlice, if_else.phis);
-                    break :slice ir.extraSlice(bounds);
-                },
-                else => unreachable,
-            };
-
-            const phi = ir.extraData(Inst.Phi, @enumFromInt(phis[payload.phi.index]));
-            return ir.typeOf(phi.src1);
-        },
+        => ir.typeOf(payload.binary.l),
     };
 }
 
@@ -252,7 +240,6 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .neg,
         .binv,
         .lnot,
-        .phiarg,
         => .unary,
         .add,
         .sub,
@@ -273,10 +260,12 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .gt,
         .le,
         .ge,
+        .phi_if_else,
+        .phi_entry_if,
+        .phi_entry_else,
         => .binary,
         .ret => .unary,
         .if_else, .loop => .op_extra,
-        .phi => .phi,
     };
 }
 

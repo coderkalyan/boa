@@ -114,14 +114,14 @@ fn mov(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot
 fn itof(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     const dst: u32 = @intFromEnum(payloads[pc].dst);
     const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].float = @bitCast(stack[op].int);
+    stack[dst].float = @floatFromInt(stack[op].int);
     next(pc + 1, tags, payloads, stack);
 }
 
 fn ftoi(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     const dst: u32 = @intFromEnum(payloads[pc].dst);
     const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].int = @bitCast(stack[op].float);
+    stack[dst].int = @intFromFloat(stack[op].float);
     next(pc + 1, tags, payloads, stack);
 }
 

@@ -82,7 +82,6 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             .lnot,
             // .load,
             .ret,
-            .phiarg,
             => if (!analysis.live_set.contains(payload.unary)) {
                 bits |= 0x1;
                 try analysis.live_set.put(arena, payload.unary, {});
@@ -106,6 +105,9 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             .gt,
             .le,
             .ge,
+            .phi_if_else,
+            .phi_entry_if,
+            .phi_entry_else,
             => {
                 if (!analysis.live_set.contains(payload.binary.l)) {
                     bits |= 0x1;
@@ -131,29 +133,6 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
             .loop => if (!analysis.live_set.contains(payload.op_extra.op)) {
                 bits |= 0x1;
                 try analysis.live_set.put(arena, payload.op_extra.op, {});
-            },
-            .phi => {
-                const ir = temp_ir;
-                const op = payload.phi.op;
-                const phis = switch (ir.instTag(op)) {
-                    .if_else => slice: {
-                        const if_else = ir.extraData(Ir.Inst.IfElse, ir.instPayload(op).op_extra.extra);
-                        const bounds = ir.extraData(Ir.Inst.ExtraSlice, if_else.phis);
-                        break :slice ir.extraSlice(bounds);
-                    },
-                    else => unreachable,
-                };
-
-                const phi = ir.extraData(Ir.Inst.Phi, @enumFromInt(phis[payload.phi.index]));
-                if (!analysis.live_set.contains(phi.src1)) {
-                    bits |= 0x1;
-                    try analysis.live_set.put(arena, phi.src1, {});
-                }
-
-                if (!analysis.live_set.contains(phi.src2)) {
-                    bits |= 0x2;
-                    try analysis.live_set.put(arena, phi.src2, {});
-                }
             },
         }
 
