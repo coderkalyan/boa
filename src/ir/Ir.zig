@@ -112,6 +112,10 @@ pub const Inst = struct {
         phi_entry_if,
         // phi between entry and else clause
         phi_entry_else,
+        // phi between entry and loop body, at top of body
+        phi_entry_body_body,
+        // phi between entry and loop body, at loop exit
+        phi_entry_body_exit,
     };
 
     pub const Payload = union {
@@ -177,6 +181,8 @@ pub const Inst = struct {
     pub const Loop = struct {
         condition: ExtraIndex,
         body: ExtraIndex,
+        phi_block: ExtraIndex,
+        phis: ExtraIndex,
     };
 };
 
@@ -227,6 +233,8 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .phi_if_else,
         .phi_entry_if,
         .phi_entry_else,
+        .phi_entry_body_body,
+        .phi_entry_body_exit,
         // TODO: union the types
         => ir.typeOf(payload.binary.l),
     };
@@ -263,6 +271,8 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .phi_if_else,
         .phi_entry_if,
         .phi_entry_else,
+        .phi_entry_body_body,
+        .phi_entry_body_exit,
         => .binary,
         .ret => .unary,
         .if_else, .loop => .op_extra,

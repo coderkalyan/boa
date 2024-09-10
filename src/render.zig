@@ -290,13 +290,19 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                 .loop => {
                     const cond = payload.op_extra.op;
                     const loop = ir.extraData(Ir.Inst.Loop, payload.op_extra.extra);
-                    try writer.print("loop(%{}, condition = {{", .{@intFromEnum(cond)});
+                    try writer.print("loop(body_phis = {{", .{});
+                    self.stream.indent();
+                    try self.stream.newline();
+                    try self.renderBlock(loop.phi_block);
+                    self.stream.dedent();
+
+                    try writer.print("}}, condition = {{", .{});
                     self.stream.indent();
                     try self.stream.newline();
                     try self.renderBlock(loop.condition);
                     self.stream.dedent();
 
-                    try writer.print("}}, body = {{", .{});
+                    try writer.print("}}, condition_yield = %{}, body = {{", .{@intFromEnum(cond)});
                     self.stream.indent();
                     try self.stream.newline();
                     try self.renderBlock(loop.body);

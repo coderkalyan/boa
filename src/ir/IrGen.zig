@@ -219,7 +219,7 @@ fn statement(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     return switch (tag) {
         .assign_simple => assignSimple(b, scope, node),
         .if_else => ifElse(b, scope, node),
-        // .while_loop => whileLoop(b, scope, node),
+        .while_loop => whileLoop(b, scope, node),
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
             unreachable;
@@ -241,10 +241,16 @@ fn assignSimple(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
 fn unionLocals(
     arena: Allocator,
     blocks: []const *const Block,
+    prepasses: []const *const std.AutoHashMapUnmanaged(InternPool.Index, void),
     locals: *std.AutoHashMapUnmanaged(InternPool.Index, void),
 ) !void {
     for (blocks) |b| {
         var iterator = b.vars.iterator();
+        while (iterator.next()) |local| try locals.put(arena, local.key_ptr.*, {});
+    }
+
+    for (prepasses) |pass| {
+        var iterator = pass.iterator();
         while (iterator.next()) |local| try locals.put(arena, local.key_ptr.*, {});
     }
 }
@@ -276,7 +282,7 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
 
     // consider all locals defined anywhere
     var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
-    try unionLocals(b.ig.arena, &.{ b, &inner_true, &inner_false }, &union_locals);
+    try unionLocals(b.ig.arena, &.{ b, &inner_true, &inner_false }, &.{}, &union_locals);
     var it = union_locals.iterator();
     var phi_index: u32 = 0;
     while (it.next()) |entry| : (phi_index += 1) {
@@ -424,37 +430,113 @@ fn blockLoop(
 fn whileLoop(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     const while_loop = b.tree.data(node).while_loop;
 
-    var inner = Block.init(b.ig, scope);
-    defer inner.deinit();
-    const condition = try valExpr(&inner, &inner.base, while_loop.condition);
-    const body = try blockLoop(b, scope, while_loop.body);
+    // loops have multiple types of phis:
+    // 1) top of body: between entry and bottom of loop body
+    // 2) exit: between entry and bottom of loop body
+    // more for control flow change (break, continue)
+    // consider all locals defined anywhere, with a pre-pass over the loop body
+    // so we can use the phi assignment in the loop body generation below
+    var body_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+    try blockLocals(b, scope, while_loop.body, &body_locals);
+    var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+    try unionLocals(b.ig.arena, &.{b}, &.{&body_locals}, &union_locals);
 
-    const loop = try b.add(.{ .tag = .loop, .payload = .{
+    const scratch_top = b.ig.scratch.items.len;
+    defer b.ig.scratch.shrinkRetainingCapacity(scratch_top);
+
+    var inner_phis = Block.init(b.ig, scope);
+    defer inner_phis.deinit();
+    var inner_condition = Block.init(b.ig, scope);
+    defer inner_condition.deinit();
+    var inner_body = Block.init(b.ig, scope);
+    defer inner_body.deinit();
+
+    // loop body generation
+    // first, reserve the necessary phis at the top
+    var it = union_locals.iterator();
+    while (it.next()) |entry| {
+        const ident = entry.key_ptr.*;
+        // if variable not mutated inside the loop body, nothing to merge
+        if (!body_locals.contains(ident)) continue;
+
+        const body_phi = try inner_phis.add(.{
+            .tag = .phi_entry_body_body,
+            // todo: this isn't safe since we don't know the type of the second operand
+            .payload = .{
+                .binary = .{
+                    .l = b.vars.get(ident).?,
+                    .r = undefined,
+                },
+            },
+        });
+        try inner_phis.ig.scratch.append(b.ig.arena, @intFromEnum(body_phi));
+        try inner_phis.vars.put(b.ig.arena, ident, body_phi);
+        try inner_body.vars.put(b.ig.arena, ident, body_phi);
+        try inner_condition.vars.put(b.ig.arena, ident, body_phi);
+    }
+    const phi_block = try b.addBlock(&inner_phis);
+
+    // generate the condition, inside its own block since its an arbitrarily complex
+    // expression that needs to execute every loop iteration (not just once like if/else)
+    const condition = try valExpr(&inner_condition, &inner_condition.base, while_loop.condition);
+    const condition_block = try b.addBlock(&inner_condition);
+
+    // then generate the actual body code
+    try blockInner(&inner_body, &inner_body.base, while_loop.body);
+    const body = try b.addBlock(&inner_body);
+
+    // and finally actually fill in the phis now that forward references
+    // are resolved
+    it = union_locals.iterator();
+    var i: usize = 0;
+    while (it.next()) |entry| {
+        const ident = entry.key_ptr.*;
+        // if variable not mutated inside the loop body, nothing to merge
+        if (!body_locals.contains(ident)) continue;
+        const body_phi = b.ig.scratch.items[scratch_top + i];
+        inner_body.update(@enumFromInt(body_phi), .{
+            .binary = .{
+                .l = b.vars.get(ident).?,
+                .r = inner_body.vars.get(ident).?,
+            },
+        });
+        i += 1;
+    }
+
+    const loop = try b.reserve(.loop);
+
+    // now, generate phis for the exit
+    it = union_locals.iterator();
+    while (it.next()) |entry| {
+        const ident = entry.key_ptr.*;
+        // if variable not mutated inside the loop body, nothing to merge
+        if (!inner_body.vars.contains(ident)) continue;
+
+        const exit_phi = try b.add(.{
+            .tag = .phi_entry_body_exit,
+            .payload = .{
+                .binary = .{
+                    .l = b.vars.get(ident).?,
+                    .r = inner_body.vars.get(ident).?,
+                },
+            },
+        });
+        try b.ig.scratch.append(b.ig.arena, @intFromEnum(exit_phi));
+        try b.vars.put(b.ig.arena, ident, exit_phi);
+    }
+
+    const phis = b.ig.scratch.items[scratch_top..];
+    b.update(loop, .{
         .op_extra = .{
             .op = condition,
             .extra = try addExtra(b.ig, Inst.Loop{
-                .condition = try b.addBlock(&inner),
+                .condition = condition_block,
                 .body = body,
+                .phi_block = phi_block,
+                .phis = try b.ig.addSlice(phis),
             }),
         },
-    } });
-
-    // TODO: support maybe undef types (once unions are in place)
-    // try b.vars.ensureUnusedCapacity(
-    //     b.ig.arena,
-    //     @max(inner_vars_true.count(), inner_vars_false.count()),
-    // );
-    // var iterator = inner_vars_true.iterator();
-    // while (iterator.next()) |entry| {
-    //     const id = entry.key_ptr.*;
-    //     const arg_true = entry.value_ptr.*;
-    //     if (inner_vars_false.get(id)) |arg_false| {
-    //         const phi = try b.add(.{ .tag = .phi, .payload = .{
-    //             .binary = .{ .l = arg_true, .r = arg_false },
-    //         } });
-    //         b.vars.putAssumeCapacity(id, phi);
-    //     }
-    // }
+    });
 
     return loop;
 }

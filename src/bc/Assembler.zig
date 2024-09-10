@@ -98,7 +98,12 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         .ret => unreachable, // TODO: implement
         .if_else => try self.ifElse(inst),
         .loop => try self.loop(inst),
-        .phi_if_else, .phi_entry_if, .phi_entry_else => {},
+        .phi_if_else,
+        .phi_entry_if,
+        .phi_entry_else,
+        .phi_entry_body_body,
+        .phi_entry_body_exit,
+        => {},
     }
 
     switch (ir.insts.items(.tag)[index]) {
@@ -393,6 +398,8 @@ const PhiContext = enum {
     branch_entry,
     branch_if,
     branch_else,
+    loop_entry,
+    loop_body,
 };
 
 pub fn phiMovs(
@@ -409,16 +416,29 @@ pub fn phiMovs(
                 .branch_entry => continue,
                 .branch_if => payload.binary.l,
                 .branch_else => payload.binary.r,
+                else => continue,
             },
             .phi_entry_if => switch (context) {
                 .branch_entry => payload.binary.l,
                 .branch_if => payload.binary.r,
                 .branch_else => continue,
+                else => continue,
             },
             .phi_entry_else => switch (context) {
                 .branch_entry => payload.binary.l,
                 .branch_if => continue,
                 .branch_else => payload.binary.r,
+                else => continue,
+            },
+            .phi_entry_body_body => switch (context) {
+                .loop_entry => payload.binary.l,
+                .loop_body => payload.binary.r,
+                else => continue,
+            },
+            .phi_entry_body_exit => switch (context) {
+                .loop_entry => payload.binary.l,
+                .loop_body => payload.binary.r,
+                else => continue,
             },
             else => unreachable,
         };
@@ -502,16 +522,47 @@ fn ifElse(self: *Assembler, inst: Ir.Index) !void {
 }
 
 fn loop(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
     const op_extra = self.ir.instPayload(inst).op_extra;
     const loop_data = self.ir.extraData(Ir.Inst.Loop, op_extra.extra);
 
-    // TODO: liveness for condition
+    // load the list of exit phis for this statement
+    const phis: []const Ir.Index = @ptrCast(ir.extraSlice(ir.extraData(
+        Ir.Inst.ExtraSlice,
+        loop_data.phis,
+    )));
+
+    // and assign each to a destination register
+    const scratch_top = self.scratch.items.len;
+    try self.scratch.ensureUnusedCapacity(self.arena, phis.len);
+    defer self.scratch.shrinkRetainingCapacity(scratch_top);
+    for (phis) |phi_inst| {
+        const register = try self.allocate();
+        try self.register_map.put(self.arena, phi_inst, register);
+        self.scratch.appendAssumeCapacity(@intFromEnum(register));
+    }
+    const assns = self.scratch.items[scratch_top..];
+
+    // for phis that include the entry, move source data into the dest register
+    try self.phiMovs(.loop_entry, phis, @ptrCast(assns));
+
+    // this jumps over the body to the condition on entry
     const jump = try self.reserve(.jump);
+
+    // generate the phi block (this should be a nop, but we do so for completeness)
+    try self.generateBlock(loop_data.phi_block);
+
+    // generate the body block
     const body_target: u32 = @intCast(self.code.len);
     try self.generateBlock(loop_data.body);
+    try self.phiMovs(.loop_body, phis, @ptrCast(assns));
+
+    // generate the condition block
     const condition_target: u32 = @intCast(self.code.len);
     try self.generateBlock(loop_data.condition);
-    const condition = self.getSlot(op_extra.op);
+
+    // branch back to the body
+    const condition = self.register_map.get(op_extra.op).?;
     try self.add(.branch, .{
         .dst = undefined,
         .ops = .{
@@ -521,6 +572,8 @@ fn loop(self: *Assembler, inst: Ir.Index) !void {
             },
         },
     });
+
+    // now that we know the layout, go back and patch the jumps
     self.update(jump, .{
         .dst = undefined,
         .ops = .{ .target = condition_target },
