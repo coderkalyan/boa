@@ -4,6 +4,7 @@ const lex = @import("lex.zig");
 const Ir = @import("ir/Ir.zig");
 const Bytecode = @import("bc/Bytecode.zig");
 const InternPool = @import("InternPool.zig");
+const Liveness = @import("ir/Liveness.zig");
 const Type = @import("type.zig").Type;
 const Allocator = std.mem.Allocator;
 
@@ -288,7 +289,17 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     try self.renderBlock(exec.exec_false);
                     self.stream.dedent();
 
-                    try writer.print("}})", .{});
+                    try writer.print("}}) [", .{});
+                    const dead_if_else = ir.liveness.extraData(Liveness.IfElse, ir.liveness.special.get(inst).?);
+                    const start = @intFromEnum(dead_if_else.dead_start);
+                    const end = @intFromEnum(dead_if_else.dead_end);
+                    const dead_insts = ir.liveness.extra[start..end];
+                    for (dead_insts, 0..) |dead, i| {
+                        try writer.print("!%{}", .{dead});
+                        if (i < dead_insts.len - 1) try writer.print(", ", .{});
+                    }
+                    try writer.print("]", .{});
+
                     try self.stream.newline();
                 },
                 .loop => {
