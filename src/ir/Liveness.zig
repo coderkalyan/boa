@@ -128,10 +128,9 @@ const Analysis = struct {
         return @enumFromInt(len);
     }
 
-    fn analyze(analysis: *Analysis, block_extra: Ir.ExtraIndex) Allocator.Error!void {
+    fn analyze(analysis: *Analysis, block: Ir.BlockIndex) Allocator.Error!void {
         const ir = analysis.ir;
-        const block = ir.extraData(Ir.Inst.ExtraSlice, block_extra);
-        const insts = ir.extraSlice(block);
+        const insts = ir.extraSlice(ir.blocks[@intFromEnum(block)]);
 
         var i: u32 = @intCast(insts.len);
         while (i > 0) {
@@ -172,22 +171,8 @@ const Analysis = struct {
             .gt,
             .le,
             .ge,
-            .phi_if_else,
-            .phi_entry_if,
-            .phi_entry_else,
-            .phi_entry_body_body,
-            .phi_entry_body_exit,
             => try analysis.binaryOp(inst),
-            .if_else => try analysis.ifElse(inst),
             else => {},
-            // // TODO: what to do here?
-            // .loop => {
-            //     const loop = ir.extraData(Ir.Inst.Loop, payload.op_extra.extra);
-            //     bits |= try analysis.markLive(1, &.{payload.op_extra.op});
-            //     try analysis.analyzeBlock(loop.condition);
-            //     try analysis.analyzeBlock(loop.body);
-            //     try analysis.analyzeBlock(loop.phi_block);
-            // },
         }
     }
 
@@ -414,19 +399,19 @@ const Analysis = struct {
 };
 
 pub fn analyze(gpa: Allocator, ir: *const Ir) !Liveness {
-    // var arena_allocator = std.heap.ArenaAllocator.init(gpa);
-    // defer arena_allocator.deinit();
-    // const arena = arena_allocator.allocator();
+    var arena_allocator = std.heap.ArenaAllocator.init(gpa);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
 
     const dead = try gpa.alloc(u8, ir.insts.len);
     errdefer gpa.free(dead);
     @memset(dead, 0);
-    const special: std.AutoHashMapUnmanaged(Ir.Index, ExtraIndex) = .{};
+    var special: std.AutoHashMapUnmanaged(Ir.Index, ExtraIndex) = .{};
     var extra: std.ArrayListUnmanaged(u32) = .{};
-    // var scratch: std.ArrayListUnmanaged(u32) = .{};
+    var scratch: std.ArrayListUnmanaged(u32) = .{};
 
-    // var analysis = Analysis.init(gpa, arena, ir, dead, &special, &extra, &scratch);
-    // try analysis.analyze(ir.block);
+    var analysis = Analysis.init(gpa, arena, ir, dead, &special, &extra, &scratch);
+    try analysis.analyze(ir.entry);
 
     return .{
         .dead = dead,
