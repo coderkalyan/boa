@@ -411,43 +411,54 @@ pub fn phiMovs(
     const ir = self.ir;
     for (phis, assns) |phi_inst, assn| {
         const payload = ir.instPayload(phi_inst);
-        const src_inst = switch (ir.instTag(phi_inst)) {
+        const dead_bits = ir.liveness.deadBits(phi_inst);
+        const lr: u32 = switch (ir.instTag(phi_inst)) {
             .phi_if_else => switch (context) {
                 .branch_entry => continue,
-                .branch_if => payload.binary.l,
-                .branch_else => payload.binary.r,
+                .branch_if => 0,
+                .branch_else => 1,
                 else => continue,
             },
             .phi_entry_if => switch (context) {
-                .branch_entry => payload.binary.l,
-                .branch_if => payload.binary.r,
+                .branch_entry => 0,
+                .branch_if => 1,
                 .branch_else => continue,
                 else => continue,
             },
             .phi_entry_else => switch (context) {
-                .branch_entry => payload.binary.l,
+                .branch_entry => 0,
                 .branch_if => continue,
-                .branch_else => payload.binary.r,
+                .branch_else => 1,
                 else => continue,
             },
             .phi_entry_body_body => switch (context) {
-                .loop_entry => payload.binary.l,
-                .loop_body => payload.binary.r,
+                .loop_entry => 0,
+                .loop_body => 1,
                 else => continue,
             },
             .phi_entry_body_exit => switch (context) {
-                .loop_entry => payload.binary.l,
-                .loop_body => payload.binary.r,
+                .loop_entry => 0,
+                .loop_body => 1,
                 else => continue,
             },
             else => unreachable,
         };
 
-        const src = self.register_map.get(src_inst).?;
-        try self.add(.mov, .{
-            .dst = assn,
-            .ops = .{ .unary = src },
-        });
+        if (lr == 0) {
+            const src = self.register_map.get(payload.binary.l).?;
+            if (dead_bits & 0x1 != 0) self.deallocate(src);
+            try self.add(.mov, .{
+                .dst = assn,
+                .ops = .{ .unary = src },
+            });
+        } else {
+            const src = self.register_map.get(payload.binary.r).?;
+            if (dead_bits & 0x2 != 0) self.deallocate(src);
+            try self.add(.mov, .{
+                .dst = assn,
+                .ops = .{ .unary = src },
+            });
+        }
     }
 }
 
@@ -474,6 +485,7 @@ fn ifElse(self: *Assembler, inst: Ir.Index) !void {
     const assns = self.scratch.items[scratch_top..];
 
     // for phis that include the entry, move source data into the dest register
+    // TODO: liveness here
     try self.phiMovs(.branch_entry, phis, @ptrCast(assns));
 
     // load in the condition

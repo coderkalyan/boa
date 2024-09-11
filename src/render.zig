@@ -272,7 +272,11 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                 .if_else => {
                     const cond = payload.op_extra.op;
                     const exec = ir.extraData(Ir.Inst.IfElse, payload.op_extra.extra);
-                    try writer.print("if_else(%{}, true = {{", .{@intFromEnum(cond)});
+                    if (dead_bits & 0x1 != 0) {
+                        try writer.print("if_else(!%{}, true = {{", .{@intFromEnum(cond)});
+                    } else {
+                        try writer.print("if_else(%{}, true = {{", .{@intFromEnum(cond)});
+                    }
                     self.stream.indent();
                     try self.stream.newline();
                     try self.renderBlock(exec.exec_true);

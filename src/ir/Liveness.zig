@@ -133,7 +133,9 @@ const Analysis = struct {
             .if_else => {
                 // check if the condition dies
                 bits |= try analysis.markLive(1, &.{payload.op_extra.op});
-                try analysis.analyzeBlock(payload.op_extra.extra);
+                const if_else = ir.extraData(Ir.Inst.IfElse, payload.op_extra.extra);
+                try analysis.analyzeBlock(if_else.exec_true);
+                try analysis.analyzeBlock(if_else.exec_false);
             },
             // TODO: what to do here?
             .loop => {
@@ -148,6 +150,51 @@ const Analysis = struct {
         const elem: u8 = if (@intFromEnum(inst) % 2 == 0) bits else @as(u8, bits) << 4;
         analysis.dead[@intFromEnum(inst) / 2] |= elem;
     }
+
+    inline fn setBits(analysis: *Analysis, inst: Ir.Index, bits: u4) void {
+        const i = @intFromEnum(inst);
+        const existing = analysis.dead[i / 2];
+        const extended: u8 = bits;
+        if (i % 2 == 0) {
+            analysis.dead[i / 2] = (existing & 0xf0) | extended;
+        } else {
+            analysis.dead[i / 2] = (existing & 0x0f) | (extended << 4);
+        }
+    }
+
+    fn unaryOp(analysis: *Analysis, inst: Ir.Index) !void {
+        const payload = analysis.ir.instPayload(inst);
+        var bits: u4 = 0;
+
+        if (!analysis.live_set.contains(payload.unary)) {
+            bits |= 0x1;
+            analysis.live_set.put(analysis.arena, payload.unary);
+        }
+        if (!analysis.live_set.remove(inst)) bits |= 0x8;
+
+        analysis.setBits(inst, bits);
+    }
+
+    fn binaryOp(analysis: *Analysis, inst: Ir.Index) !void {
+        const payload = analysis.ir.instPayload(inst);
+        var bits: u4 = 0;
+
+        if (!analysis.live_set.contains(payload.binary.l)) {
+            bits |= 0x1;
+            analysis.live_set.put(analysis.arena, payload.binary.l);
+        }
+        if (!analysis.live_set.contains(payload.binary.r)) {
+            bits |= 0x2;
+            analysis.live_set.put(analysis.arena, payload.binary.r);
+        }
+        if (!analysis.live_set.remove(inst)) bits |= 0x8;
+
+        analysis.setBits(inst, bits);
+    }
+
+    fn ifElse(analysis: *Analysis, inst: Ir.Index) !void {
+        const payload = analysis.ir.instPayload(inst);
+    }
 };
 
 pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
@@ -158,15 +205,6 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
     var analysis = try Analysis.init(gpa, arena, temp_ir);
     errdefer analysis.deinit();
 
-    // TODO: we need to consider instructions in the right order,
-    // rather than just blindly iterating through the temp_ir
-    // but to hack things for now, pretend phi_entry_body_bodys
-    // never die
-    // for (0..insts.len) |i| {
-    //     const inst: Ir.Index = @enumFromInt(i);
-    //     const tag = temp_ir.instTag(inst);
-    //     if (tag == .phi_entry_body_body) try analysis.live_set.put(arena, inst, {});
-    // }
     try analysis.analyzeBlock(temp_ir.block);
 
     return .{
@@ -190,3 +228,4 @@ pub fn analyze(gpa: Allocator, temp_ir: *const Ir) !Liveness {
 //     }
 //     return @enumFromInt(len);
 // }
+//
