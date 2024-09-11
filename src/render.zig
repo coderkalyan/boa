@@ -279,10 +279,19 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
             switch (tag) {
                 .br => {
                     const branch = ir.extraData(Ir.Inst.Branch, payload.unary_extra.extra);
-                    const cond = payload.unary_extra.op;
+                    const cond = @intFromEnum(payload.unary_extra.op);
                     const exec_if = @intFromEnum(branch.exec_if);
                     const exec_else = @intFromEnum(branch.exec_else);
                     try writer.print("br(%{}, block{}, block{})", .{ cond, exec_if, exec_else });
+                    try self.stream.newline();
+                },
+                .phi => {
+                    const phi = ir.extraData(Ir.Inst.Phi, payload.extra);
+                    try writer.print("phi(", .{});
+                    try ir.pool.print(writer, phi.ty);
+                    const src1 = @intFromEnum(phi.src1);
+                    const src2 = @intFromEnum(phi.src2);
+                    try writer.print(", %{}, %{})", .{ src1, src2 });
                     try self.stream.newline();
                 },
                 inline else => {
@@ -304,7 +313,7 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                         },
                         .ip => try ir.pool.print(writer, payload.ip),
                         .block => try writer.print("block{}", .{@intFromEnum(payload.block)}),
-                        .unary_extra => unreachable,
+                        .extra, .unary_extra => unreachable,
                     }
                     try writer.print(")", .{});
                     try self.stream.newline();

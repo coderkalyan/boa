@@ -92,6 +92,8 @@ pub const Inst = struct {
         jmp,
         // branch conditionally to one of two blocks
         br,
+        // select between two instructions
+        phi,
     };
 
     pub const Payload = union {
@@ -107,6 +109,7 @@ pub const Inst = struct {
             extra: ExtraIndex,
         },
         block: BlockIndex,
+        extra: ExtraIndex,
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -123,6 +126,7 @@ pub const Inst = struct {
             binary,
             unary_extra,
             block,
+            extra,
         };
     };
 
@@ -134,6 +138,12 @@ pub const Inst = struct {
     pub const Branch = struct {
         exec_if: BlockIndex,
         exec_else: BlockIndex,
+    };
+
+    pub const Phi = struct {
+        ty: InternPool.Index,
+        src1: Index,
+        src2: Index,
     };
 };
 
@@ -179,6 +189,8 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
+        // TODO: union l and r
+        .phi => ir.extraData(Inst.Phi, payload.extra).ty,
     };
 }
 
@@ -210,6 +222,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .gt,
         .le,
         .ge,
+        .phi,
         => .binary,
         .ret => .unary,
         .jmp => .block,
