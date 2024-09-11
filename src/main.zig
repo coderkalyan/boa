@@ -86,16 +86,16 @@ pub fn main() !void {
             try writer.print("{}\n\n", .{ir.insts.len});
             // _ = ir;
 
-            const bytecode = try Assembler.assemble(gpa, &pool, &ir);
-            {
-                const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-                // _ = bytecode_renderer;
-                var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
-                try renderer.render();
-                try buffered_out.flush();
-            }
-            try writer.print("{}\n\n", .{bytecode.code.len});
-            try interpret(gpa, &bytecode);
+            // const bytecode = try Assembler.assemble(gpa, &pool, &ir);
+            // {
+            //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+            //     // _ = bytecode_renderer;
+            //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
+            //     try renderer.render();
+            //     try buffered_out.flush();
+            // }
+            // try writer.print("{}\n\n", .{bytecode.code.len});
+            // try interpret(gpa, &bytecode);
         }
     }
 }

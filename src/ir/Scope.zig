@@ -139,7 +139,7 @@ pub const Block = struct {
         b.ig.update(index, payload);
     }
 
-    pub fn addBlock(b: *Block, inner: *Block) !Ir.ExtraIndex {
+    pub fn addBlock(b: *Block, inner: *Block) !Ir.BlockIndex {
         const ig = b.ig;
 
         const scratch_top = ig.scratch.items.len;
@@ -150,9 +150,11 @@ pub const Block = struct {
             ig.scratch.appendAssumeCapacity(@intFromEnum(inst));
         }
         const insts = ig.scratch.items[scratch_top..];
-        const pl = try ig.addSlice(insts);
+        const slice = try ig.addSlice(insts);
 
-        return pl;
+        const index: u32 = @intCast(ig.blocks.items.len);
+        try ig.blocks.append(ig.gpa, slice);
+        return @enumFromInt(index);
     }
 
     // pub inline fn declare(b: *Block, ident: InternPool.Index, inst: Ir.Index) !void {

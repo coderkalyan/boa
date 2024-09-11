@@ -8,13 +8,15 @@ pool: *InternPool,
 tree: *const Ast,
 insts: List.Slice,
 extra: []const u32,
-block: ExtraIndex,
+blocks: []const Inst.ExtraSlice,
+entry: BlockIndex,
 liveness: Liveness,
 
 pub const Ir = @This();
 pub const List = std.MultiArrayList(Inst);
 pub const Index = enum(u32) { _ };
 pub const ExtraIndex = enum(u32) { _ };
+pub const BlockIndex = enum(u32) { _ };
 
 pub const Inst = struct {
     tag: Tag,
@@ -86,57 +88,25 @@ pub const Inst = struct {
 
         // return a value
         ret,
-
-        // allocate a stack slot for a variable
-        // .ip = type of variable
-        // alloc,
-        // load a value from a stack slot
-        // .unary = alloc inst
-        // load,
-        // store a value in a stack slot
-        // .binary = alloc inst and operand to store
-        // store,
-        // free a previously allocated stack slot
-        // .unary = alloc inst
-        // dealloc,
-
-        // if else
-        // .op_extra = condition inst and IfElse extra
-        if_else,
-        // loop while condition
-        loop,
-
-        // phi between if and else clauses
-        phi_if_else,
-        // phi between entry and if clause
-        phi_entry_if,
-        // phi between entry and else clause
-        phi_entry_else,
-        // phi between entry and loop body, at top of body
-        phi_entry_body_body,
-        // phi between entry and loop body, at loop exit
-        phi_entry_body_exit,
+        // jump unconditionally to a new block
+        jmp,
+        // branch conditionally to one of two blocks
+        br,
     };
 
     pub const Payload = union {
         placeholder: void,
         ip: InternPool.Index,
-        // int: u64,
-        // float: f64,
-        // bool: bool,
         unary: Index,
         binary: struct {
             l: Index,
             r: Index,
         },
-        op_extra: struct {
+        unary_extra: struct {
             op: Index,
             extra: ExtraIndex,
         },
-        extra_index: struct {
-            extra: ExtraIndex,
-            index: u32,
-        },
+        block: BlockIndex,
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -151,7 +121,8 @@ pub const Inst = struct {
             ip,
             unary,
             binary,
-            op_extra,
+            unary_extra,
+            block,
         };
     };
 
@@ -160,29 +131,9 @@ pub const Inst = struct {
         end: ExtraIndex,
     };
 
-    pub const Phi = struct {
-        semantics: Semantics,
-        src1: Index,
-        src2: Index,
-
-        pub const Semantics = enum(u32) {
-            branch_if_else,
-            branch_entry_if,
-            branch_entry_else,
-        };
-    };
-
-    pub const IfElse = struct {
-        exec_true: ExtraIndex,
-        exec_false: ExtraIndex,
-        phis: ExtraIndex,
-    };
-
-    pub const Loop = struct {
-        condition: ExtraIndex,
-        body: ExtraIndex,
-        phi_block: ExtraIndex,
-        phis: ExtraIndex,
+    pub const Branch = struct {
+        exec_if: BlockIndex,
+        exec_else: BlockIndex,
     };
 };
 
@@ -227,16 +178,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .lor, .land => .bool,
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
         .ret => ir.typeOf(payload.unary),
-        // TODO: confirm, but we shouldn't use result of if
-        // this may change when adding phi insts
-        .if_else, .loop => unreachable,
-        .phi_if_else,
-        .phi_entry_if,
-        .phi_entry_else,
-        .phi_entry_body_body,
-        .phi_entry_body_exit,
-        // TODO: union the types
-        => ir.typeOf(payload.binary.l),
+        .jmp, .br => unreachable,
     };
 }
 
@@ -268,14 +210,10 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .gt,
         .le,
         .ge,
-        .phi_if_else,
-        .phi_entry_if,
-        .phi_entry_else,
-        .phi_entry_body_body,
-        .phi_entry_body_exit,
         => .binary,
         .ret => .unary,
-        .if_else, .loop => .op_extra,
+        .jmp => .block,
+        .br => .unary_extra,
     };
 }
 

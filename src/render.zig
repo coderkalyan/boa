@@ -242,13 +242,20 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
         }
 
         pub fn render(self: *Self) !void {
-            try self.renderBlock(self.ir.block);
+            const writer = self.stream.writer();
+            for (self.ir.blocks, 0..) |block, i| {
+                try writer.print("block{}:", .{i});
+                try self.stream.newline();
+
+                self.stream.indent();
+                try self.renderBlock(block);
+                self.stream.dedent();
+            }
         }
 
-        pub fn renderBlock(self: *Self, block: Ir.ExtraIndex) WriterType.Error!void {
+        pub fn renderBlock(self: *Self, slice: Ir.Inst.ExtraSlice) WriterType.Error!void {
             const ir = self.ir;
 
-            const slice = ir.extraData(Ir.Inst.ExtraSlice, block);
             const insts = ir.extraSlice(slice);
             for (insts) |inst| {
                 try self.renderInst(@enumFromInt(inst));
@@ -270,60 +277,12 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
             const tag = ir.insts.items(.tag)[index];
             const payload = ir.insts.items(.payload)[index];
             switch (tag) {
-                .if_else => {
-                    const cond = payload.op_extra.op;
-                    const exec = ir.extraData(Ir.Inst.IfElse, payload.op_extra.extra);
-                    if (dead_bits & 0x1 != 0) {
-                        try writer.print("if_else(!%{}, true = {{", .{@intFromEnum(cond)});
-                    } else {
-                        try writer.print("if_else(%{}, true = {{", .{@intFromEnum(cond)});
-                    }
-                    self.stream.indent();
-                    try self.stream.newline();
-                    try self.renderBlock(exec.exec_true);
-                    self.stream.dedent();
-
-                    try writer.print("}}, false = {{", .{});
-                    self.stream.indent();
-                    try self.stream.newline();
-                    try self.renderBlock(exec.exec_false);
-                    self.stream.dedent();
-
-                    try writer.print("}}) [", .{});
-                    const dead_if_else = ir.liveness.extraData(Liveness.IfElse, ir.liveness.special.get(inst).?);
-                    const start = @intFromEnum(dead_if_else.dead_start);
-                    const end = @intFromEnum(dead_if_else.dead_end);
-                    const dead_insts = ir.liveness.extra[start..end];
-                    for (dead_insts, 0..) |dead, i| {
-                        try writer.print("!%{}", .{dead});
-                        if (i < dead_insts.len - 1) try writer.print(", ", .{});
-                    }
-                    try writer.print("]", .{});
-
-                    try self.stream.newline();
-                },
-                .loop => {
-                    const cond = payload.op_extra.op;
-                    const loop = ir.extraData(Ir.Inst.Loop, payload.op_extra.extra);
-                    try writer.print("loop(body_phis = {{", .{});
-                    self.stream.indent();
-                    try self.stream.newline();
-                    try self.renderBlock(loop.phi_block);
-                    self.stream.dedent();
-
-                    try writer.print("}}, condition = {{", .{});
-                    self.stream.indent();
-                    try self.stream.newline();
-                    try self.renderBlock(loop.condition);
-                    self.stream.dedent();
-
-                    try writer.print("}}, condition_yield = %{}, body = {{", .{@intFromEnum(cond)});
-                    self.stream.indent();
-                    try self.stream.newline();
-                    try self.renderBlock(loop.body);
-                    self.stream.dedent();
-
-                    try writer.print("}})", .{});
+                .br => {
+                    const branch = ir.extraData(Ir.Inst.Branch, payload.unary_extra.extra);
+                    const cond = payload.unary_extra.op;
+                    const exec_if = @intFromEnum(branch.exec_if);
+                    const exec_else = @intFromEnum(branch.exec_else);
+                    try writer.print("br(%{}, block{}, block{})", .{ cond, exec_if, exec_else });
                     try self.stream.newline();
                 },
                 inline else => {
@@ -344,7 +303,8 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                             try writer.print("{s}%{}, {s}%{}", .{ dead_l, l, dead_r, r });
                         },
                         .ip => try ir.pool.print(writer, payload.ip),
-                        .op_extra => unreachable,
+                        .block => try writer.print("block{}", .{@intFromEnum(payload.block)}),
+                        .unary_extra => unreachable,
                     }
                     try writer.print(")", .{});
                     try self.stream.newline();

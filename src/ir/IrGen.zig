@@ -18,7 +18,10 @@ pool: *InternPool,
 tree: *const Ast,
 insts: Ir.List,
 extra: std.ArrayListUnmanaged(u32),
+blocks: std.ArrayListUnmanaged(Inst.ExtraSlice),
 scratch: std.ArrayListUnmanaged(u32),
+current_block: std.ArrayListUnmanaged(Ir.Index),
+// current_block: Block,
 
 pub fn addExtra(ig: *IrGen, extra: anytype) !Ir.ExtraIndex {
     const len: u32 = @intCast(ig.extra.items.len);
@@ -53,15 +56,15 @@ pub fn extraSlice(ig: *IrGen, slice: Ir.Inst.ExtraSlice) []const u32 {
     return ig.extra.items[start..end];
 }
 
-pub fn addSlice(ig: *IrGen, slice: []const u32) !Ir.ExtraIndex {
+pub fn addSlice(ig: *IrGen, slice: []const u32) !Inst.ExtraSlice {
     const start: u32 = @intCast(ig.extra.items.len);
     try ig.extra.appendSlice(ig.gpa, slice);
     const end: u32 = @intCast(ig.extra.items.len);
 
-    return ig.addExtra(Inst.ExtraSlice{
+    return Inst.ExtraSlice{
         .start = @enumFromInt(start),
         .end = @enumFromInt(end),
-    });
+    };
 }
 
 // constructs a Ir.Inst by consolidating data insts and locs arrays
@@ -101,11 +104,12 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
         .tree = tree,
         .insts = .{},
         .extra = .{},
+        .blocks = .{},
         .scratch = .{},
+        // .current_block = Block.init(&ig, &function.base),
     };
 
     var module: Scope.Module = .{};
-    var function = Scope.Function.init(&module.base);
 
     // try ig.declareSlots(&function, node);
     // for (0..function.var_slots.len) |i| {
@@ -117,8 +121,9 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     // const b = try pool.put(.{ .str = "b" });
     // std.debug.print("{?} {?}\n", .{ function.var_table.get(a), function.var_table.get(b) });
 
-    var toplevel_block = Block.init(&ig, &function.base);
-    const block_index = try block(&toplevel_block, &toplevel_block.base, node);
+    // var toplevel_block = Block.init(&ig, &function.base);
+    // var toplevel_block = Block.init(&ig, &function.base);
+    const entry = try ig.block(&module.base, node);
     // try blockInner()
     // post order format guarantees that the module node will be the last
     // const module_node: u32 = @intCast(tree.nodes.len - 1);
@@ -135,50 +140,26 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
         .tree = tree,
         .insts = ig.insts.toOwnedSlice(),
         .extra = try ig.extra.toOwnedSlice(gpa),
-        .block = block_index,
+        .entry = entry,
+        .blocks = try ig.blocks.toOwnedSlice(gpa),
         .liveness = undefined,
     };
+    ir = ir;
 
     const liveness = try Liveness.analyze(gpa, &ir);
     ir.liveness = liveness;
     return ir;
 }
 
-// fn declareSlots(ig: *IrGen, func: *Scope.Function, node: Node.Index) !void {
-//     const tree = ig.tree;
-//     const data = tree.data(node).block;
-//     const sl = tree.extraData(data.stmts, Node.ExtraSlice);
-//     const stmts = tree.extraSlice(sl);
-//
-//     for (stmts) |stmt| {
-//         switch (tree.data(stmt)) {
-//             .assign_simple => |assign| switch (tree.data(assign.ptr)) {
-//                 .ident => {
-//                     const ident_token = tree.mainToken(assign.ptr);
-//                     const ident_str = tree.tokenString(ident_token);
-//                     const ident = try ig.pool.put(.{ .str = ident_str });
-//                     _ = try func.reserveSlot(ig.arena, ident);
-//                 },
-//                 else => unreachable, // TODO: unimplemented
-//             },
-//             .if_simple => |if_simple| try ig.declareSlots(func, if_simple.exec_true),
-//             // TODO: if_else, if_chain
-//             .for_loop => |for_loop| try ig.declareSlots(func, for_loop.body),
-//             .while_loop => |while_loop| try ig.declareSlots(func, while_loop.body),
-//             else => {},
-//         }
-//     }
-// }
-
-fn block(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.ExtraIndex {
+fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.BlockIndex {
     var inner = Block.init(b.ig, scope);
     defer inner.deinit();
 
-    try blockInner(&inner, &inner.base, node);
+    try ig.blockInner(&inner, &inner.base, node);
     return b.addBlock(&inner);
 }
 
-fn blockInner(b: *Block, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+fn blockInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
     const data = b.tree.data(node).block;
 
     const sl = b.tree.extraData(data.stmts, Node.ExtraSlice);
@@ -221,7 +202,7 @@ fn statement(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     return switch (tag) {
         .assign_simple => assignSimple(b, scope, node),
         .if_else => ifElse(b, scope, node),
-        .while_loop => whileLoop(b, scope, node),
+        // .while_loop => whileLoop(b, scope, node),
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
             unreachable;
@@ -264,98 +245,113 @@ fn ifElse(b: *Block, scope: *Scope, node: Node.Index) !Ir.Index {
     // the condition can be evaluated in the "parent" scope
     const cond = try valExpr(b, scope, if_else.condition);
 
-    var inner_true = Block.init(b.ig, scope);
-    defer inner_true.deinit();
-    try blockInner(&inner_true, &inner_true.base, exec.exec_true);
-    const exec_true = try b.addBlock(&inner_true);
+    var inner_if = Block.init(b.ig, scope);
+    defer inner_if.deinit();
+    try blockInner(&inner_if, &inner_if.base, exec.exec_true);
+    const exec_if = try b.addBlock(&inner_if);
 
-    var inner_false = Block.init(b.ig, scope);
-    defer inner_false.deinit();
-    try blockInner(&inner_false, &inner_false.base, exec.exec_false);
-    const exec_false = try b.addBlock(&inner_false);
+    var inner_else = Block.init(b.ig, scope);
+    defer inner_else.deinit();
+    try blockInner(&inner_else, &inner_else.base, exec.exec_false);
+    const exec_else = try b.addBlock(&inner_else);
 
-    const inst = try b.reserve(.if_else);
-    // the majority of complexity here is generate phi annotations to
-    // indicate that locals assigned in the if and/or else blocks should
-    // be merged and exported to the local scope after the if statement
+    const branch = try b.ig.addExtra(Inst.Branch{
+        .exec_if = exec_if,
+        .exec_else = exec_else,
+    });
 
-    const scratch_top = b.ig.scratch.items.len;
-    defer b.ig.scratch.shrinkRetainingCapacity(scratch_top);
-
-    // consider all locals defined anywhere
-    var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
-    try unionLocals(b.ig.arena, &.{ b, &inner_true, &inner_false }, &.{}, &union_locals);
-    var it = union_locals.iterator();
-    var phi_index: u32 = 0;
-    while (it.next()) |entry| : (phi_index += 1) {
-        const ident = entry.key_ptr.*;
-        const live_parent = b.vars.contains(ident);
-        const live_if = inner_true.vars.contains(ident);
-        const live_else = inner_false.vars.contains(ident);
-
-        // if variable not mutated inside the if statement, nothing to merge
-        if (!live_if and !live_else) continue;
-
-        const phi = if (live_if) phi: {
-            // three posibilities to merge:
-            // 1) defined in if and else -> merge two children (overwrites parent)
-            // 2) defined in if and parent -> merge child and parent
-            // 3) defined only in if -> merge with undef
-            if (live_else) {
-                break :phi try b.add(.{
-                    .tag = .phi_if_else,
-                    .payload = .{
-                        .binary = .{
-                            .l = inner_true.vars.get(ident).?,
-                            .r = inner_false.vars.get(ident).?,
-                        },
-                    },
-                });
-            } else if (live_parent) {
-                break :phi try b.add(.{
-                    .tag = .phi_entry_if,
-                    .payload = .{
-                        .binary = .{
-                            .l = b.vars.get(ident).?,
-                            .r = inner_true.vars.get(ident).?,
-                        },
-                    },
-                });
-            } else unreachable; // TODO: implement this
-        } else phi: {
-            // two posibilities to merge:
-            // 1) defined in else and parent -> merge child and parent
-            // 2) defined only in else -> merge with undef
-            if (live_parent) {
-                break :phi try b.add(.{
-                    .tag = .phi_entry_if,
-                    .payload = .{
-                        .binary = .{
-                            .l = b.vars.get(ident).?,
-                            .r = inner_false.vars.get(ident).?,
-                        },
-                    },
-                });
-            } else unreachable; // TODO: implement this
-        };
-
-        try b.ig.scratch.append(b.ig.arena, @intFromEnum(phi));
-        try b.vars.put(b.ig.arena, ident, phi);
-    }
-
-    const phis = b.ig.scratch.items[scratch_top..];
-    b.update(inst, .{
-        .op_extra = .{
-            .op = cond,
-            .extra = try addExtra(b.ig, Inst.IfElse{
-                .exec_true = exec_true,
-                .exec_false = exec_false,
-                .phis = try b.ig.addSlice(phis),
-            }),
+    return b.add(.{
+        .tag = .br,
+        .payload = .{
+            .unary_extra = .{
+                .op = cond,
+                .extra = branch,
+            },
         },
     });
 
-    return inst;
+    // const inst = try b.reserve(.if_else);
+    // // the majority of complexity here is generate phi annotations to
+    // // indicate that locals assigned in the if and/or else blocks should
+    // // be merged and exported to the local scope after the if statement
+    //
+    // const scratch_top = b.ig.scratch.items.len;
+    // defer b.ig.scratch.shrinkRetainingCapacity(scratch_top);
+    //
+    // // consider all locals defined anywhere
+    // var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+    // try unionLocals(b.ig.arena, &.{ b, &inner_true, &inner_false }, &.{}, &union_locals);
+    // var it = union_locals.iterator();
+    // var phi_index: u32 = 0;
+    // while (it.next()) |entry| : (phi_index += 1) {
+    //     const ident = entry.key_ptr.*;
+    //     const live_parent = b.vars.contains(ident);
+    //     const live_if = inner_true.vars.contains(ident);
+    //     const live_else = inner_false.vars.contains(ident);
+    //
+    //     // if variable not mutated inside the if statement, nothing to merge
+    //     if (!live_if and !live_else) continue;
+    //
+    //     const phi = if (live_if) phi: {
+    //         // three posibilities to merge:
+    //         // 1) defined in if and else -> merge two children (overwrites parent)
+    //         // 2) defined in if and parent -> merge child and parent
+    //         // 3) defined only in if -> merge with undef
+    //         if (live_else) {
+    //             break :phi try b.add(.{
+    //                 .tag = .phi_if_else,
+    //                 .payload = .{
+    //                     .binary = .{
+    //                         .l = inner_true.vars.get(ident).?,
+    //                         .r = inner_false.vars.get(ident).?,
+    //                     },
+    //                 },
+    //             });
+    //         } else if (live_parent) {
+    //             break :phi try b.add(.{
+    //                 .tag = .phi_entry_if,
+    //                 .payload = .{
+    //                     .binary = .{
+    //                         .l = b.vars.get(ident).?,
+    //                         .r = inner_true.vars.get(ident).?,
+    //                     },
+    //                 },
+    //             });
+    //         } else unreachable; // TODO: implement this
+    //     } else phi: {
+    //         // two posibilities to merge:
+    //         // 1) defined in else and parent -> merge child and parent
+    //         // 2) defined only in else -> merge with undef
+    //         if (live_parent) {
+    //             break :phi try b.add(.{
+    //                 .tag = .phi_entry_if,
+    //                 .payload = .{
+    //                     .binary = .{
+    //                         .l = b.vars.get(ident).?,
+    //                         .r = inner_false.vars.get(ident).?,
+    //                     },
+    //                 },
+    //             });
+    //         } else unreachable; // TODO: implement this
+    //     };
+    //
+    //     try b.ig.scratch.append(b.ig.arena, @intFromEnum(phi));
+    //     try b.vars.put(b.ig.arena, ident, phi);
+    // }
+    //
+    // const phis = b.ig.scratch.items[scratch_top..];
+    // b.update(inst, .{
+    //     .op_extra = .{
+    //         .op = cond,
+    //         .extra = try addExtra(b.ig, Inst.IfElse{
+    //             .exec_true = exec_true,
+    //             .exec_false = exec_false,
+    //             .phis = try b.ig.addSlice(phis),
+    //         }),
+    //     },
+    // });
+    //
+    // return inst;
 }
 
 fn blockLoop(
@@ -842,7 +838,8 @@ fn getTempIr(ig: *const IrGen) Ir {
         .tree = ig.tree,
         .insts = ig.insts.slice(),
         .extra = ig.extra.items,
-        .block = undefined,
+        .entry = undefined,
+        .blocks = ig.blocks.items,
         .liveness = undefined,
     };
 }
