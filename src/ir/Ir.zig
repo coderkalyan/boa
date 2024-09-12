@@ -8,7 +8,7 @@ pool: *InternPool,
 tree: *const Ast,
 insts: List.Slice,
 extra: []const u32,
-blocks: []const Inst.ExtraSlice,
+blocks: []const Block,
 entry: BlockIndex,
 liveness: Liveness,
 
@@ -17,6 +17,10 @@ pub const List = std.MultiArrayList(Inst);
 pub const Index = enum(u32) { _ };
 pub const ExtraIndex = enum(u32) { _ };
 pub const BlockIndex = enum(u32) { _ };
+
+pub const Block = struct {
+    insts: Inst.ExtraSlice,
+};
 
 pub const Inst = struct {
     tag: Tag,
@@ -92,7 +96,7 @@ pub const Inst = struct {
         jmp,
         // branch conditionally to one of two blocks
         br,
-        // select between two instructions
+        // select between two phiparams
         phi,
     };
 
@@ -143,7 +147,9 @@ pub const Inst = struct {
     pub const Phi = struct {
         ty: InternPool.Index,
         src1: Index,
+        block1: BlockIndex,
         src2: Index,
+        block2: BlockIndex,
     };
 };
 
@@ -189,7 +195,6 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
-        // TODO: union l and r
         .phi => ir.extraData(Inst.Phi, payload.extra).ty,
     };
 }
@@ -228,6 +233,61 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .jmp => .block,
         .br => .unary_extra,
     };
+}
+
+pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index {
+    const index = @intFromEnum(inst);
+    const tag = ir.insts.items(.tag)[index];
+    const payload = ir.insts.items(.payload)[index];
+
+    switch (tag) {
+        .constant => return &.{},
+        .itof,
+        .ftoi,
+        .neg,
+        .binv,
+        .lnot,
+        .ret,
+        => {
+            ops[0] = payload.unary;
+            return ops[0..1];
+        },
+        .add,
+        .sub,
+        .mul,
+        .div,
+        .mod,
+        .pow,
+        .bor,
+        .band,
+        .bxor,
+        .sll,
+        .sra,
+        .lor,
+        .land,
+        .eq,
+        .ne,
+        .lt,
+        .gt,
+        .le,
+        .ge,
+        => {
+            ops[0] = payload.binary.l;
+            ops[1] = payload.binary.r;
+            return ops[0..2];
+        },
+        .phi => {
+            const phi = ir.extraData(Ir.Inst.Phi, payload.extra);
+            ops[0] = phi.src1;
+            ops[1] = phi.src2;
+            return ops[0..2];
+        },
+        .jmp => return &.{},
+        .br => {
+            ops[0] = payload.unary_extra.op;
+            return ops[0..1];
+        },
+    }
 }
 
 pub inline fn instTag(ir: *const Ir, inst: Index) Inst.Tag {

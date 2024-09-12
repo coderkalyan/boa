@@ -8,7 +8,6 @@ const Liveness = @import("Liveness.zig");
 const Allocator = std.mem.Allocator;
 const Node = Ast.Node;
 const Inst = Ir.Inst;
-const Block = Scope.Block;
 
 const IrGen = @This();
 
@@ -18,10 +17,10 @@ pool: *InternPool,
 tree: *const Ast,
 insts: Ir.List,
 extra: std.ArrayListUnmanaged(u32),
-blocks: std.ArrayListUnmanaged(Inst.ExtraSlice),
+blocks: std.ArrayListUnmanaged(Ir.Block),
 scratch: std.ArrayListUnmanaged(u32),
 current_block: std.ArrayListUnmanaged(Ir.Index),
-// current_block: Block,
+// current_block: Scope.Block,
 
 pub fn addExtra(ig: *IrGen, extra: anytype) !Ir.ExtraIndex {
     const len: u32 = @intCast(ig.extra.items.len);
@@ -114,17 +113,19 @@ pub fn addBlock(ig: *IrGen) !Ir.BlockIndex {
     ig.current_block.clearRetainingCapacity();
 
     const index: u32 = @intCast(ig.blocks.items.len);
-    try ig.blocks.append(ig.gpa, slice);
+    try ig.blocks.append(ig.gpa, .{
+        .insts = slice,
+    });
     return @enumFromInt(index);
 }
 
-pub fn reserveBlock(ig: *IrGen) !Ir.BlockIndex {
+pub fn reserveBlock(ig: *IrGen) !Ir.Scope.BlockIndex {
     const index: u32 = @intCast(ig.blocks.items.len);
     try ig.blocks.append(ig.gpa, undefined);
     return @enumFromInt(index);
 }
 
-pub fn updateBlock(ig: *IrGen, index: Ir.BlockIndex) !Ir.BlockIndex {
+pub fn updateBlock(ig: *IrGen, index: Ir.Scope.BlockIndex) !Ir.Scope.BlockIndex {
     const slice = try ig.addSlice(@ptrCast(ig.current_block.items));
     ig.current_block.clearRetainingCapacity();
     ig.blocks.items[@intFromEnum(index)] = slice;
@@ -149,7 +150,7 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
         .blocks = .{},
         .scratch = .{},
         .current_block = .{},
-        // .current_block = Block.init(&ig, &function.base),
+        // .current_block = Scope.Block.init(&ig, &function.base),
     };
 
     var module: Scope.Module = .{};
@@ -164,8 +165,8 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     // const b = try pool.put(.{ .str = "b" });
     // std.debug.print("{?} {?}\n", .{ function.var_table.get(a), function.var_table.get(b) });
 
-    // var toplevel_block = Block.init(&ig, &function.base);
-    // var toplevel_block = Block.init(&ig, &function.base);
+    // var toplevel_block = Scope.Block.init(&ig, &function.base);
+    // var toplevel_block = Scope.Block.init(&ig, &function.base);
     // const entry = try ig.block(&module.base, node);
     try ig.block(&module.base, node);
     const entry = try ig.addBlock();
@@ -196,13 +197,13 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     return ir;
 }
 
-// fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.BlockIndex {
+// fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Scope.BlockIndex {
 fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
-    var inner = Block.init(ig, scope);
+    var inner = Scope.Block.init(ig, scope);
     defer inner.deinit();
 
     try ig.blockInner(&inner.base, node);
-    // return ig.addBlock(&inner);
+    // return ig.addScope.Block(&inner);
 }
 
 fn blockInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
@@ -246,6 +247,7 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         .assign_simple => ig.assignSimple(scope, node),
         .if_else => ig.ifElse(scope, node),
         .while_loop => ig.whileLoop(scope, node),
+        .return_val => ig.returnVal(scope, node),
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
             unreachable;
@@ -260,14 +262,14 @@ fn assignSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const id = try ig.pool.put(.{ .str = ident_str });
 
     const val = try ig.valExpr(scope, assign.val);
-    const b = scope.cast(Block).?;
+    const b = scope.cast(Scope.Block).?;
     try b.vars.put(ig.arena, id, val);
     return val;
 }
 
 fn unionLocals(
     arena: Allocator,
-    blocks: []const *const Block,
+    blocks: []const *const Scope.Block,
     prepasses: []const *const std.AutoHashMapUnmanaged(InternPool.Index, void),
     locals: *std.AutoHashMapUnmanaged(InternPool.Index, void),
 ) !void {
@@ -283,22 +285,22 @@ fn unionLocals(
 }
 
 fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
-    const b = scope.cast(Block).?;
+    const b = scope.cast(Scope.Block).?;
     const if_else = ig.tree.data(node).if_else;
     const exec = ig.tree.extraData(if_else.exec, Node.IfElse);
 
     // the condition can be evaluated in the "parent" scope
     const cond = try ig.valExpr(scope, if_else.condition);
     const br = try ig.reserve(.br);
-    _ = try ig.addBlock();
+    const entry_block = try ig.addBlock();
 
-    var inner_if = Block.init(ig, scope);
+    var inner_if = Scope.Block.init(ig, scope);
     defer inner_if.deinit();
     try ig.blockInner(&inner_if.base, exec.exec_true);
     const jmp1 = try ig.reserve(.jmp);
     const exec_if = try ig.addBlock();
 
-    var inner_else = Block.init(ig, scope);
+    var inner_else = Scope.Block.init(ig, scope);
     defer inner_else.deinit();
     try ig.blockInner(&inner_else.base, exec.exec_true);
     const jmp2 = try ig.reserve(.jmp);
@@ -326,24 +328,26 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         // if variable not mutated inside the if statement, nothing to merge
         if (!live_if and !live_else) continue;
 
-        const payload: Ir.Inst.Payload = if (live_if) phi: {
+        const phi_data: Ir.Inst.Phi = if (live_if) phi: {
             // three posibilities to merge:
             // 1) defined in if and else -> merge two children (overwrites parent)
             // 2) defined in if and parent -> merge child and parent
             // 3) defined only in if -> merge with undef
             if (live_else) {
                 break :phi .{
-                    .binary = .{
-                        .l = inner_if.vars.get(ident).?,
-                        .r = inner_else.vars.get(ident).?,
-                    },
+                    .ty = ig.getTempIr().typeOf(inner_if.vars.get(ident).?),
+                    .src1 = inner_if.vars.get(ident).?,
+                    .block1 = exec_if,
+                    .src2 = inner_else.vars.get(ident).?,
+                    .block2 = exec_else,
                 };
             } else if (live_parent) {
                 break :phi .{
-                    .binary = .{
-                        .l = b.vars.get(ident).?,
-                        .r = inner_if.vars.get(ident).?,
-                    },
+                    .ty = ig.getTempIr().typeOf(b.vars.get(ident).?),
+                    .src1 = b.vars.get(ident).?,
+                    .block1 = entry_block,
+                    .src2 = inner_if.vars.get(ident).?,
+                    .block2 = exec_if,
                 };
             } else unreachable; // TODO: implement this
         } else phi: {
@@ -352,15 +356,17 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
             // 2) defined only in else -> merge with undef
             if (live_parent) {
                 break :phi .{
-                    .binary = .{
-                        .l = b.vars.get(ident).?,
-                        .r = inner_else.vars.get(ident).?,
-                    },
+                    .ty = ig.getTempIr().typeOf(b.vars.get(ident).?),
+                    .src1 = b.vars.get(ident).?,
+                    .block1 = entry_block,
+                    .src2 = inner_else.vars.get(ident).?,
+                    .block2 = exec_else,
                 };
             } else unreachable; // TODO: implement this
         };
 
-        const phi = try ig.add(.{ .tag = .phi, .payload = payload });
+        const phi_extra = try ig.addExtra(phi_data);
+        const phi = try ig.add(.{ .tag = .phi, .payload = .{ .extra = phi_extra } });
         try b.vars.put(b.ig.arena, ident, phi);
     }
 
@@ -368,11 +374,11 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 }
 
 fn blockLoop(
-    b: *Block,
+    b: *Scope.Block,
     scope: *Scope,
     node: Node.Index,
 ) error{OutOfMemory}!Ir.ExtraIndex {
-    var inner = Block.init(b.ig, scope);
+    var inner = Scope.Block.init(b.ig, scope);
     defer inner.deinit();
 
     // first, scan through the block and list the locals that are assigned inside
@@ -435,11 +441,11 @@ fn blockLoop(
     // }
 
     // now seal and return the block
-    return b.addBlock(&inner);
+    return b.addScope.Block(&inner);
 }
 
 fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
-    const b = scope.cast(Block).?;
+    const b = scope.cast(Scope.Block).?;
     const while_loop = ig.tree.data(node).while_loop;
 
     // loops have multiple types of phis:
@@ -464,10 +470,14 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 
     // create the block contexts for body and condition so we can reserve phis
     // for our locals
-    var inner_body = Block.init(ig, scope);
+    var inner_body = Scope.Block.init(ig, scope);
     defer inner_body.deinit();
-    var inner_condition = Block.init(ig, scope);
+    var inner_condition = Scope.Block.init(ig, scope);
     defer inner_condition.deinit();
+
+    // jump from entry to condition
+    const jmp1 = try ig.reserve(.jmp);
+    const entry_block = try ig.addBlock();
 
     // reserve phis for each mutated local
     const scratch_top = ig.scratch.items.len;
@@ -478,7 +488,9 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         const phi_data = try ig.addExtra(Inst.Phi{
             .ty = ig.getTempIr().typeOf(src_entry),
             .src1 = src_entry,
+            .block1 = entry_block,
             .src2 = undefined,
+            .block2 = undefined,
         });
         const phi = try ig.addUnlinked(.{ .tag = .phi, .payload = .{ .extra = phi_data } });
         ig.scratch.appendAssumeCapacity(@intFromEnum(phi));
@@ -486,10 +498,6 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         try inner_body.vars.put(ig.arena, ident, phi);
         try b.vars.put(ig.arena, ident, phi);
     }
-
-    // jump from entry to condition
-    const jmp1 = try ig.reserve(.jmp);
-    _ = try ig.addBlock();
 
     // generate the body
     try ig.blockInner(&inner_body.base, while_loop.body);
@@ -510,7 +518,8 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         const phi_data = ig.getTempIr().instPayload(@enumFromInt(phi)).extra;
         // TODO: cleaner way to patch this
         const src_body = @intFromEnum(inner_body.vars.get(ident).?);
-        ig.extra.items[@intFromEnum(phi_data) + 2] = src_body;
+        ig.extra.items[@intFromEnum(phi_data) + 3] = src_body;
+        ig.extra.items[@intFromEnum(phi_data) + 4] = @intFromEnum(condition_block);
     }
 
     const exit = ig.currentBlock();
@@ -543,7 +552,7 @@ inline fn valExpr(ig: *IrGen, s: *Scope, node: Node.Index) !Ir.Index {
     return ig.expr(s, ri, node);
 }
 
-inline fn ptrExpr(b: *Block, s: *Scope, node: Node.Index) !Ir.Index {
+inline fn ptrExpr(b: *Scope.Block, s: *Scope, node: Node.Index) !Ir.Index {
     const ri: ResultInfo = .{ .semantics = .ptr };
     return expr(b, s, ri, node);
 }
@@ -813,6 +822,15 @@ fn binaryFloatDecay(ig: *IrGen, l: *Ir.Index, r: *Ir.Index) !void {
         .bool => {},
         else => unreachable,
     }
+}
+
+fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+    const return_val = ig.tree.data(node).return_val;
+    const operand = try ig.valExpr(scope, return_val);
+    return ig.add(.{
+        .tag = .ret,
+        .payload = .{ .unary = operand },
+    });
 }
 
 fn getTempIr(ig: *const IrGen) Ir {

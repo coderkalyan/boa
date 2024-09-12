@@ -253,8 +253,9 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
             }
         }
 
-        pub fn renderBlock(self: *Self, slice: Ir.Inst.ExtraSlice) WriterType.Error!void {
+        pub fn renderBlock(self: *Self, block: Ir.Block) WriterType.Error!void {
             const ir = self.ir;
+            const slice = block.insts;
 
             const insts = ir.extraSlice(slice);
             for (insts) |inst| {
@@ -282,7 +283,8 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     const cond = @intFromEnum(payload.unary_extra.op);
                     const exec_if = @intFromEnum(branch.exec_if);
                     const exec_else = @intFromEnum(branch.exec_else);
-                    try writer.print("br(%{}, block{}, block{})", .{ cond, exec_if, exec_else });
+                    const dead = if (dead_bits & 0x1 != 0) "!" else "";
+                    try writer.print("br({s}%{}, block{}, block{})", .{ dead, cond, exec_if, exec_else });
                     try self.stream.newline();
                 },
                 .phi => {
@@ -290,8 +292,19 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     try writer.print("phi(", .{});
                     try ir.pool.print(writer, phi.ty);
                     const src1 = @intFromEnum(phi.src1);
+                    const block1 = @intFromEnum(phi.block1);
                     const src2 = @intFromEnum(phi.src2);
-                    try writer.print(", %{}, %{})", .{ src1, src2 });
+                    const block2 = @intFromEnum(phi.block2);
+                    const dead1 = if (dead_bits & 0x1 != 0) "!" else "";
+                    const dead2 = if (dead_bits & 0x2 != 0) "!" else "";
+                    try writer.print(", block{}: {s}%{}, block{}: {s}%{})", .{
+                        block1,
+                        dead1,
+                        src1,
+                        block2,
+                        dead2,
+                        src2,
+                    });
                     try self.stream.newline();
                 },
                 inline else => {
