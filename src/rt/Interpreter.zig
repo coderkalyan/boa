@@ -371,9 +371,11 @@ fn fge(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot
 
 fn branch(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     const condition: u32 = @intFromEnum(payloads[pc].ops.branch.condition);
-    const branch_target: u32 = payloads[pc].ops.branch.target;
-    const target = if (stack[condition].int == 1) branch_target else pc + 1;
-    next(target, tags, payloads, stack);
+    if (stack[condition].int == 1) {
+        const branch_target: u32 = payloads[pc].ops.branch.target;
+        next(branch_target, tags, payloads, stack);
+    }
+    next(pc + 1, tags, payloads, stack);
 }
 
 fn jump(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
