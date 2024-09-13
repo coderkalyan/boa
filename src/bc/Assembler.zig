@@ -2,6 +2,7 @@ const std = @import("std");
 const InternPool = @import("../InternPool.zig");
 const Ir = @import("../ir/Ir.zig");
 const Bytecode = @import("Bytecode.zig");
+const PrePass = @import("PrePass.zig");
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
@@ -22,8 +23,8 @@ free_registers: std.ArrayListUnmanaged(Bytecode.Register),
 // from Ir index to bytecode index, so they can be updated later
 inst_map: std.AutoHashMapUnmanaged(Ir.Index, u32),
 scratch: std.ArrayListUnmanaged(u32),
-live_range_count: []u32,
-visited: []bool,
+order: []const Ir.BlockIndex,
+phis: []const std.ArrayListUnmanaged(PrePass.PhiMarker),
 
 const Slot = struct {
     inst: Ir.Index,
@@ -34,6 +35,17 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     var arena_allocator = std.heap.ArenaAllocator.init(gpa);
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
+
+    const entry: Ir.BlockIndex = @enumFromInt(0);
+    const prepass = try PrePass.analyze(arena, ir, entry);
+    for (prepass.order) |i| std.debug.print("{}, ", .{@intFromEnum(i)});
+    std.debug.print("\n", .{});
+    for (prepass.ranges, 0..) |end, start| std.debug.print("%{}..%{}\n", .{ start, @intFromEnum(end) });
+    // for (0..ir.blocks.len) |i| {
+    //     std.debug.print("block{}: ", .{i});
+    //     for (prepass.phis[i].items) |phi| std.debug.print("%{} -> %{}, ", .{ @intFromEnum(phi.operand), @intFromEnum(phi.phi) });
+    //     std.debug.print("\n", .{});
+    // }
 
     var assembler: Assembler = .{
         .gpa = gpa,
@@ -46,19 +58,11 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .register_map = .{},
         .inst_map = .{},
         .scratch = .{},
-        .live_range_count = try arena.alloc(u32, ir.insts.len),
-        .visited = try arena.alloc(bool, ir.insts.len),
+        .order = prepass.order,
+        .phis = prepass.phis,
     };
 
-    const entry: Ir.BlockIndex = @enumFromInt(0);
-    @memset(assembler.live_range_count, 0);
-    @memset(assembler.visited, false);
-    _ = entry;
-    // try assembler.updateLiveRangeCount(entry);
-    // for (assembler.live_range_count, 0..) |c, i| std.debug.print("%{}: {} ends\n", .{ i, c });
-
-    // @memset(assembler.visited, false);
-    // try assembler.generateBlock(entry);
+    for (prepass.order) |block| try assembler.generateBlock(block);
     // try assembler.add(.exit, undefined);
 
     return .{
