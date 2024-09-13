@@ -215,7 +215,6 @@ const Analysis = struct {
         for (insts) |inst| {
             if (ir.instTag(inst) != .phi) break;
             const phi_data = ir.extraData(Ir.Inst.Phi, ir.instPayload(inst).extra);
-            std.debug.print("query: block = {}, successor = {}, key = {}\n", .{ @intFromEnum(block), @intFromEnum(successor), @intFromEnum(key) });
             if (phi_data.src1 == key and phi_data.block1 != block) return true;
             if (phi_data.src2 == key and phi_data.block2 != block) return true;
         }
@@ -375,16 +374,16 @@ pub fn analyze(gpa: Allocator, ir: *const Ir) !Liveness {
             const block_dirty = try analysis.analyzeBlock(@enumFromInt(i));
             dirty = dirty or block_dirty;
 
-            std.debug.print("block{} in: ", .{i});
-            var it = analysis.live_in[i].keyIterator();
-            while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
-            std.debug.print("\nblock{} out: ", .{i});
-            it = analysis.live_out[i].keyIterator();
-            while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
-            std.debug.print("\n", .{});
+            // std.debug.print("block{} in: ", .{i});
+            // var it = analysis.live_in[i].keyIterator();
+            // while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
+            // std.debug.print("\nblock{} out: ", .{i});
+            // it = analysis.live_out[i].keyIterator();
+            // while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
+            // std.debug.print("\n", .{});
         }
 
-        std.debug.print("\n", .{});
+        // std.debug.print("\n", .{});
         if (!dirty) break;
     }
 

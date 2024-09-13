@@ -169,7 +169,7 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     // var toplevel_block = Scope.Block.init(&ig, &function.base);
     // const entry = try ig.block(&module.base, node);
     try ig.block(&module.base, node);
-    const entry = try ig.addBlock();
+    _ = try ig.addBlock();
     // try blockInner()
     // post order format guarantees that the module node will be the last
     // const module_node: u32 = @intCast(tree.nodes.len - 1);
@@ -186,7 +186,6 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
         .tree = tree,
         .insts = ig.insts.toOwnedSlice(),
         .extra = try ig.extra.toOwnedSlice(gpa),
-        .entry = entry,
         .blocks = try ig.blocks.toOwnedSlice(gpa),
         .liveness = undefined,
     };
@@ -839,7 +838,6 @@ fn getTempIr(ig: *const IrGen) Ir {
         .tree = ig.tree,
         .insts = ig.insts.slice(),
         .extra = ig.extra.items,
-        .entry = undefined,
         .blocks = ig.blocks.items,
         .liveness = undefined,
     };

@@ -22,6 +22,8 @@ free_registers: std.ArrayListUnmanaged(Bytecode.Register),
 // from Ir index to bytecode index, so they can be updated later
 inst_map: std.AutoHashMapUnmanaged(Ir.Index, u32),
 scratch: std.ArrayListUnmanaged(u32),
+live_range_count: []u32,
+visited: []bool,
 
 const Slot = struct {
     inst: Ir.Index,
@@ -29,12 +31,13 @@ const Slot = struct {
 };
 
 pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
+    var arena_allocator = std.heap.ArenaAllocator.init(gpa);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
 
     var assembler: Assembler = .{
         .gpa = gpa,
-        .arena = arena.allocator(),
+        .arena = arena,
         .pool = pool,
         .ir = ir,
         .code = .{},
@@ -43,9 +46,20 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .register_map = .{},
         .inst_map = .{},
         .scratch = .{},
+        .live_range_count = try arena.alloc(u32, ir.insts.len),
+        .visited = try arena.alloc(bool, ir.insts.len),
     };
-    try assembler.generateBlock(ir.block);
-    try assembler.add(.exit, undefined);
+
+    const entry: Ir.BlockIndex = @enumFromInt(0);
+    @memset(assembler.live_range_count, 0);
+    @memset(assembler.visited, false);
+    _ = entry;
+    // try assembler.updateLiveRangeCount(entry);
+    // for (assembler.live_range_count, 0..) |c, i| std.debug.print("%{}: {} ends\n", .{ i, c });
+
+    // @memset(assembler.visited, false);
+    // try assembler.generateBlock(entry);
+    // try assembler.add(.exit, undefined);
 
     return .{
         .ir = ir,
@@ -53,16 +67,45 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     };
 }
 
-fn generateBlock(self: *Assembler, index: Ir.ExtraIndex) error{OutOfMemory}!void {
+fn updateLiveRangeCount(self: *Assembler, block: Ir.BlockIndex) !void {
     const ir = self.ir;
-    const block = ir.extraData(Ir.Inst.ExtraSlice, index);
-    const insts = ir.extraSlice(block);
+    const n = @intFromEnum(block);
+    if (self.visited[n]) return;
+    self.visited[n] = true;
+
+    const insts: []const Ir.Index = @ptrCast(ir.extraSlice(ir.blocks[n].insts));
     for (insts) |inst| {
-        try self.generateInst(@enumFromInt(inst));
+        var ops: [2]Ir.Index = undefined;
+        for (ir.operands(inst, &ops)) |operand| {
+            self.live_range_count[@intFromEnum(operand)] += 1;
+        }
+
+        switch (ir.instTag(inst)) {
+            .jmp => try self.updateLiveRangeCount(ir.instPayload(inst).block),
+            .br => {
+                const extra = ir.instPayload(inst).unary_extra.extra;
+                const branch = ir.extraData(Ir.Inst.Branch, extra);
+                try self.updateLiveRangeCount(branch.exec_if);
+                try self.updateLiveRangeCount(branch.exec_else);
+            },
+            else => {},
+        }
     }
 }
 
-fn generateInst(self: *Assembler, inst: Ir.Index) !void {
+fn generateBlock(self: *Assembler, block: Ir.BlockIndex) error{OutOfMemory}!void {
+    const ir = self.ir;
+    const n = @intFromEnum(block);
+    if (self.visited[n]) return;
+    self.visited[n] = true;
+
+    const insts = ir.extraSlice(ir.blocks[n].insts);
+    for (insts) |inst| {
+        try self.generateInst(block, @enumFromInt(inst));
+    }
+}
+
+fn generateInst(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
     const ir = self.ir;
     const dead_bits = ir.liveness.deadBits(inst);
 
@@ -95,21 +138,25 @@ fn generateInst(self: *Assembler, inst: Ir.Index) !void {
         => try self.binaryOp(inst),
         .lor => try self.lor(inst),
         .land => try self.land(inst),
-        .ret => unreachable, // TODO: implement
-        .if_else => try self.ifElse(inst),
-        .loop => try self.loop(inst),
-        .phi_if_else,
-        .phi_entry_if,
-        .phi_entry_else,
-        .phi_entry_body_body,
-        .phi_entry_body_exit,
-        => {},
+        .jmp => try self.jmp(block, inst),
+        .br => try self.br(block, inst),
+        // .ret => unreachable, // TODO: implement
+        else => {},
+        // .if_else => try self.ifElse(inst),
+        // .loop => try self.loop(inst),
+        // .phi_if_else,
+        // .phi_entry_if,
+        // .phi_entry_else,
+        // .phi_entry_body_body,
+        // .phi_entry_body_exit,
+        // => {},
     }
 
-    switch (ir.insts.items(.tag)[index]) {
-        .if_else, .loop => {},
-        else => if (dead_bits & 0x8 != 0) self.unassign(inst),
-    }
+    // switch (ir.insts.items(.tag)[index]) {
+    //     .if_else, .loop => {},
+    //     else => if (dead_bits & 0x8 != 0) self.unassign(inst),
+    // }
+    if (dead_bits & 0x8 != 0) self.unassign(inst);
 }
 
 inline fn add(self: *Assembler, tag: Bytecode.Inst.Tag, payload: Bytecode.Inst.Payload) !void {
@@ -164,7 +211,11 @@ fn assign(self: *Assembler, inst: Ir.Index) !Bytecode.Register {
 }
 
 fn unassign(self: *Assembler, inst: Ir.Index) void {
-    if (!self.register_map.contains(inst)) std.debug.print("no: {}\n", .{@intFromEnum(inst)});
+    const i = @intFromEnum(inst);
+    self.live_range_count[i] -= 1;
+    if (self.live_range_count[i] > 0) return;
+
+    if (!self.register_map.contains(inst)) std.debug.print("no: {}\n", .{i});
     const index = self.register_map.get(inst).?;
     std.debug.assert(self.register_map.remove(inst));
     self.free_registers.appendAssumeCapacity(index);
@@ -286,6 +337,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
         else => unreachable,
     };
 
+    std.debug.print("binary: {s}, %{}\n", .{ @tagName(self.ir.instTag(inst)), binary.l });
     const l = self.register_map.get(binary.l).?;
     const r = self.register_map.get(binary.r).?;
     const dead_bits = self.ir.liveness.deadBits(inst);
@@ -331,263 +383,37 @@ fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
     });
 }
 
-// TODO: this is just plain wrong, this logic needs to be done in Ir since
-// otherwise the operands are still eagerly evaluated
-fn lor(self: *Assembler, inst: Ir.Index) !void {
-    const binary = self.ir.instPayload(inst).binary;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-
-    var one: [4]u8 = undefined;
-    @memcpy(asBytes(&one), asBytes(&@as(u32, 1)));
-    const dst = try self.allocate();
-    try self.add(.ld, .{
-        .dst = dst,
-        .ops = .{ .imm = one },
-    });
-
-    // if the first operand is true, skip checking the second one
-    const op1 = self.getSlot(binary.l);
-    if (dead_bits & 0x1 != 0) self.unassign(binary.l);
-    const branch = try self.reserve(.branch); // will consume op1
-
-    const op2 = self.getSlot(binary.r);
-    if (dead_bits & 0x2 != 0) self.unassign(binary.r);
-    try self.add(.mov, .{ .dst = dst, .ops = .{ .unary = op2 } });
-    self.update(branch, .{
-        .dst = undefined,
-        .ops = .{
-            .branch = .{
-                .condition = op1,
-                .target = @intCast(self.code.len),
-            },
-        },
-    });
-}
-
-// TODO: this is just plain wrong, this logic needs to be done in Ir since
-// otherwise the operands are still eagerly evaluated
-fn land(self: *Assembler, inst: Ir.Index) !void {
-    const binary = self.ir.instPayload(inst).binary;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-
-    const op1 = self.getSlot(binary.l);
-    const inv = try self.assign(inst);
-    try self.add(.lnot, .{ .dst = inv, .ops = .{ .unary = op1 } });
-
-    const zero = [_]u8{0} ** 4;
-    const dst = try self.assign(inst);
-    try self.add(.ld, .{ .dst = dst, .ops = .{ .imm = zero } });
-    if (dead_bits & 0x1 != 0) self.unassign(binary.l);
-    const branch = try self.reserve(.branch); // will consume op1
-
-    const op2 = self.getSlot(binary.r);
-    if (dead_bits & 0x2 != 0) self.unassign(binary.r);
-    try self.add(.mov, .{ .dst = dst, .ops = .{ .unary = op2 } });
-    self.update(branch, .{
-        .dst = undefined,
-        .ops = .{
-            .branch = .{
-                .condition = inv,
-                .target = @intCast(self.code.len),
-            },
-        },
-    });
-}
-
-const PhiContext = enum {
-    branch_entry,
-    branch_if,
-    branch_else,
-    loop_entry,
-    loop_body,
-};
-
-pub fn phiMovs(
-    self: *Assembler,
-    comptime context: PhiContext,
-    phis: []const Ir.Index,
-    assns: []const Register,
-) !void {
-    const ir = self.ir;
-    for (phis, assns) |phi_inst, assn| {
-        const payload = ir.instPayload(phi_inst);
-        const dead_bits = ir.liveness.deadBits(phi_inst);
-        const lr: u32 = switch (ir.instTag(phi_inst)) {
-            .phi_if_else => switch (context) {
-                .branch_entry => continue,
-                .branch_if => 0,
-                .branch_else => 1,
-                else => continue,
-            },
-            .phi_entry_if => switch (context) {
-                .branch_entry => 0,
-                .branch_if => 1,
-                .branch_else => continue,
-                else => continue,
-            },
-            .phi_entry_else => switch (context) {
-                .branch_entry => 0,
-                .branch_if => continue,
-                .branch_else => 1,
-                else => continue,
-            },
-            .phi_entry_body_body => switch (context) {
-                .loop_entry => 0,
-                .loop_body => 1,
-                else => continue,
-            },
-            .phi_entry_body_exit => switch (context) {
-                .loop_entry => 0,
-                .loop_body => 1,
-                else => continue,
-            },
-            else => unreachable,
-        };
-
-        if (lr == 0) {
-            const src = self.register_map.get(payload.binary.l).?;
-            if (dead_bits & 0x1 != 0) self.deallocate(src);
-            try self.add(.mov, .{
-                .dst = assn,
-                .ops = .{ .unary = src },
-            });
-        } else {
-            const src = self.register_map.get(payload.binary.r).?;
-            if (dead_bits & 0x2 != 0) self.deallocate(src);
-            try self.add(.mov, .{
-                .dst = assn,
-                .ops = .{ .unary = src },
-            });
-        }
+fn jmp(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
+    const jump = self.ir.instPayload(inst).block;
+    const next: Ir.BlockIndex = @enumFromInt(@intFromEnum(block) + 1);
+    if (jump != next) {
+        try self.add(.jump, .{
+            .dst = undefined,
+            .ops = .{ .target = @intCast(self.code.len) },
+        });
     }
+
+    try self.generateBlock(jump);
 }
 
-fn ifElse(self: *Assembler, inst: Ir.Index) !void {
-    const ir = self.ir;
-    const op_extra = ir.instPayload(inst).op_extra;
-    const if_else = ir.extraData(Ir.Inst.IfElse, op_extra.extra);
+fn br(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
+    _ = self;
+    _ = block;
+    _ = inst;
+    // const payload = self.ir.instPayload(inst).unary_extra;
+    // const branch = self.ir.extraData(Ir.Inst.Branch, payload.extra);
+    //
+    // const operand = self.register_map.get(payload.op).?;
+    // const dead_bits = self.ir.liveness.deadBits(inst);
+    // if (dead_bits & 0x1 != 0) self.deallocate(operand);
+    // const next: Ir.BlockIndex = @enumFromInt(@intFromEnum(block) + 1);
 
-    // load the list of exit phis for this statement
-    const phis: []const Ir.Index = @ptrCast(ir.extraSlice(ir.extraData(
-        Ir.Inst.ExtraSlice,
-        if_else.phis,
-    )));
+    // if (jump != next) {
+    //     try self.add(.jump, .{
+    //         .dst = undefined,
+    //         .ops = .{ .target = @intCast(self.code.len) },
+    //     });
+    // }
 
-    // and assign each to a destination register
-    const scratch_top = self.scratch.items.len;
-    try self.scratch.ensureUnusedCapacity(self.arena, phis.len);
-    defer self.scratch.shrinkRetainingCapacity(scratch_top);
-    for (phis) |phi_inst| {
-        const register = try self.allocate();
-        try self.register_map.put(self.arena, phi_inst, register);
-        self.scratch.appendAssumeCapacity(@intFromEnum(register));
-    }
-    const assns = self.scratch.items[scratch_top..];
-
-    // for phis that include the entry, move source data into the dest register
-    // TODO: liveness here
-    try self.phiMovs(.branch_entry, phis, @ptrCast(assns));
-
-    // load in the condition
-    const condition = self.register_map.get(op_extra.op).?;
-    const dead_bits = ir.liveness.deadBits(inst);
-    if (dead_bits & 0x1 != 0) self.deallocate(condition);
-
-    // and invert it so we can branch to false
-    const inv = try self.allocate();
-    try self.add(.lnot, .{
-        .dst = inv,
-        .ops = .{ .unary = condition },
-    });
-    self.deallocate(inv);
-
-    // this branches over the if clause to the else clause, will be filled in later
-    const else_branch = try self.reserve(.branch);
-
-    // generate the "if" block and its phis
-    try self.generateBlock(if_else.exec_true);
-    try self.phiMovs(.branch_if, @ptrCast(phis), @ptrCast(assns));
-    const else_target: u32 = @intCast(self.code.len);
-
-    // this jumps over the else clause to the exit
-    const exit_jump = try self.reserve(.jump);
-
-    // generate the "else" block and its phis
-    try self.generateBlock(if_else.exec_false);
-    try self.phiMovs(.branch_else, @ptrCast(phis), @ptrCast(assns));
-    const exit_target: u32 = @intCast(self.code.len);
-
-    // now that we know the layout, go back and patch the jumps
-    self.update(else_branch, .{
-        .dst = undefined,
-        .ops = .{
-            .branch = .{
-                .condition = condition,
-                .target = else_target,
-            },
-        },
-    });
-    self.update(exit_jump, .{
-        .dst = undefined,
-        .ops = .{ .target = exit_target },
-    });
-}
-
-fn loop(self: *Assembler, inst: Ir.Index) !void {
-    const ir = self.ir;
-    const op_extra = self.ir.instPayload(inst).op_extra;
-    const loop_data = self.ir.extraData(Ir.Inst.Loop, op_extra.extra);
-
-    // load the list of exit phis for this statement
-    const phis: []const Ir.Index = @ptrCast(ir.extraSlice(ir.extraData(
-        Ir.Inst.ExtraSlice,
-        loop_data.phis,
-    )));
-
-    // and assign each to a destination register
-    const scratch_top = self.scratch.items.len;
-    try self.scratch.ensureUnusedCapacity(self.arena, phis.len);
-    defer self.scratch.shrinkRetainingCapacity(scratch_top);
-    for (phis) |phi_inst| {
-        const register = try self.allocate();
-        try self.register_map.put(self.arena, phi_inst, register);
-        self.scratch.appendAssumeCapacity(@intFromEnum(register));
-    }
-    const assns = self.scratch.items[scratch_top..];
-
-    // for phis that include the entry, move source data into the dest register
-    try self.phiMovs(.loop_entry, phis, @ptrCast(assns));
-
-    // this jumps over the body to the condition on entry
-    const jump = try self.reserve(.jump);
-
-    // generate the phi block (this should be a nop, but we do so for completeness)
-    try self.generateBlock(loop_data.phi_block);
-
-    // generate the body block
-    const body_target: u32 = @intCast(self.code.len);
-    try self.generateBlock(loop_data.body);
-    try self.phiMovs(.loop_body, phis, @ptrCast(assns));
-
-    // generate the condition block
-    const condition_target: u32 = @intCast(self.code.len);
-    try self.generateBlock(loop_data.condition);
-
-    // branch back to the body
-    const condition = self.register_map.get(op_extra.op).?;
-    try self.add(.branch, .{
-        .dst = undefined,
-        .ops = .{
-            .branch = .{
-                .condition = condition,
-                .target = body_target,
-            },
-        },
-    });
-
-    // now that we know the layout, go back and patch the jumps
-    self.update(jump, .{
-        .dst = undefined,
-        .ops = .{ .target = condition_target },
-    });
+    // try self.generateBlock(jump);
 }

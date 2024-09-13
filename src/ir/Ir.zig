@@ -9,7 +9,6 @@ tree: *const Ast,
 insts: List.Slice,
 extra: []const u32,
 blocks: []const Block,
-entry: BlockIndex,
 liveness: Liveness,
 
 pub const Ir = @This();
