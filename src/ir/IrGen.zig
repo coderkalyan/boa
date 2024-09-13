@@ -519,7 +519,7 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         // TODO: cleaner way to patch this
         const src_body = @intFromEnum(inner_body.vars.get(ident).?);
         ig.extra.items[@intFromEnum(phi_data) + 3] = src_body;
-        ig.extra.items[@intFromEnum(phi_data) + 4] = @intFromEnum(condition_block);
+        ig.extra.items[@intFromEnum(phi_data) + 4] = @intFromEnum(body);
     }
 
     const exit = ig.currentBlock();

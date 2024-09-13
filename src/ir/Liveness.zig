@@ -135,10 +135,22 @@ const Analysis = struct {
         return @enumFromInt(len);
     }
 
+    fn compareLiveSets(a: *const LiveSet, b: *const LiveSet) bool {
+        const a_count = a.count();
+        const b_count = b.count();
+        if (a_count != b_count) return false;
+
+        var it = a.keyIterator();
+        while (it.next()) |key_ptr| if (!b.contains(key_ptr.*)) return false;
+        return true;
+    }
+
     fn analyzeBlock(analysis: *Analysis, block: Ir.BlockIndex) !bool {
         const ir = analysis.ir;
         const n = @intFromEnum(block);
         const insts: []const Ir.Index = @ptrCast(ir.extraSlice(ir.blocks[n].insts));
+        // var live_in: LiveSet = .{};
+        // var live_out: LiveSet = .{};
         const live_in = &analysis.live_in[n];
         const live_out = &analysis.live_out[n];
         var dirty = false;
@@ -150,7 +162,6 @@ const Analysis = struct {
 
         var def: LiveSet = .{};
         try def.ensureTotalCapacity(analysis.arena, @intCast(insts.len));
-        for (insts) |inst| def.putAssumeCapacity(inst, {});
 
         // live_in[block] := use[block] U (live_out[block] - def[block])
         for (insts) |inst| {
@@ -160,6 +171,7 @@ const Analysis = struct {
                 const gop = try live_in.getOrPut(analysis.arena, operand);
                 dirty = dirty or !gop.found_existing;
             }
+            def.putAssumeCapacity(inst, {});
         }
         it = live_out.keyIterator();
         while (it.next()) |key| {
@@ -182,12 +194,33 @@ const Analysis = struct {
         for (successors) |successor| {
             it = analysis.live_in[@intFromEnum(successor)].keyIterator();
             while (it.next()) |key| {
+                if (analysis.filterPhi(block, successor, key.*)) continue;
                 const gop = try live_out.getOrPut(analysis.arena, key.*);
                 dirty = dirty or !gop.found_existing;
             }
         }
 
+        // dirty = !compareLiveSets(&analysis.live_in[n], &live_in);
+        // dirty = dirty or !compareLiveSets(&analysis.live_out[n], &live_out);
+        // analysis.live_in[n] = live_in;
+        // analysis.live_out[n] = live_out;
         return dirty;
+    }
+
+    fn filterPhi(analysis: *const Analysis, block: Ir.BlockIndex, successor: Ir.BlockIndex, key: Ir.Index) bool {
+        const ir = analysis.ir;
+
+        const n = @intFromEnum(successor);
+        const insts: []const Ir.Index = @ptrCast(ir.extraSlice(ir.blocks[n].insts));
+        for (insts) |inst| {
+            if (ir.instTag(inst) != .phi) break;
+            const phi_data = ir.extraData(Ir.Inst.Phi, ir.instPayload(inst).extra);
+            std.debug.print("query: block = {}, successor = {}, key = {}\n", .{ @intFromEnum(block), @intFromEnum(successor), @intFromEnum(key) });
+            if (phi_data.src1 == key and phi_data.block1 != block) return true;
+            if (phi_data.src2 == key and phi_data.block2 != block) return true;
+        }
+
+        return false;
     }
 
     fn markDeadBits(analysis: *Analysis, block: Ir.BlockIndex) Allocator.Error!void {
@@ -256,7 +289,7 @@ const Analysis = struct {
             bits |= 0x1;
             try live_out.put(analysis.arena, payload.unary, {});
         }
-        if (!live_out.remove(inst)) bits |= 0x8;
+        if (!live_out.contains(inst)) bits |= 0x8;
 
         analysis.setBits(inst, bits);
     }
@@ -273,7 +306,7 @@ const Analysis = struct {
             bits |= 0x2;
             try live_out.put(analysis.arena, payload.binary.r, {});
         }
-        if (!live_out.remove(inst)) bits |= 0x8;
+        if (!live_out.contains(inst)) bits |= 0x8;
 
         analysis.setBits(inst, bits);
     }
@@ -291,7 +324,7 @@ const Analysis = struct {
             bits |= 0x2;
             try live_out.put(analysis.arena, phi_data.src2, {});
         }
-        if (!live_out.remove(inst)) bits |= 0x8;
+        if (!live_out.contains(inst)) bits |= 0x8;
 
         analysis.setBits(inst, bits);
     }
@@ -335,7 +368,6 @@ pub fn analyze(gpa: Allocator, ir: *const Ir) !Liveness {
 
     var analysis = try Analysis.init(gpa, arena, ir, dead, &special, &extra, &scratch);
     while (true) {
-        // for (0..10) |_| {
         var dirty = false;
         var i = ir.blocks.len;
         while (i > 0) {
@@ -343,28 +375,22 @@ pub fn analyze(gpa: Allocator, ir: *const Ir) !Liveness {
             const block_dirty = try analysis.analyzeBlock(@enumFromInt(i));
             dirty = dirty or block_dirty;
 
-            // std.debug.print("live_in for block{}\n", .{i});
-            // var it = analysis.live_in[i].keyIterator();
-            // while (it.next()) |key| std.debug.print("%{}\n", .{key.*});
-            // std.debug.print("live_out for block{}\n", .{i});
-            // it = analysis.live_out[i].keyIterator();
-            // while (it.next()) |key| std.debug.print("%{}\n", .{key.*});
-            // std.debug.print("\n", .{});
+            std.debug.print("block{} in: ", .{i});
+            var it = analysis.live_in[i].keyIterator();
+            while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
+            std.debug.print("\nblock{} out: ", .{i});
+            it = analysis.live_out[i].keyIterator();
+            while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
+            std.debug.print("\n", .{});
         }
 
-        // break;
+        std.debug.print("\n", .{});
         if (!dirty) break;
     }
 
     var i = ir.blocks.len;
     while (i > 0) {
         i -= 1;
-        std.debug.print("live_in for block{}\n", .{i});
-        var it = analysis.live_in[i].keyIterator();
-        while (it.next()) |key| std.debug.print("%{}\n", .{key.*});
-        std.debug.print("live_out for block{}\n", .{i});
-        it = analysis.live_out[i].keyIterator();
-        while (it.next()) |key| std.debug.print("%{}\n", .{key.*});
         try analysis.markDeadBits(@enumFromInt(i));
     }
 
