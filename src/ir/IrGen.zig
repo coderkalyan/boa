@@ -879,6 +879,9 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir
     const binary = ig.tree.data(node).binary;
     const token_tag = ig.tree.tokenTag(op_token);
 
+    if (token_tag == .k_or) return ig.logicalOr(scope, node);
+    if (token_tag == .k_and) return ig.logicalAnd(scope, node);
+
     var l = try ig.valExpr(scope, binary.left);
     var r = try ig.valExpr(scope, binary.right);
     if (token_tag == .slash) {
@@ -900,7 +903,7 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir
     std.debug.assert(lty == rty);
     // const ty = lty;
 
-    const tag: Ir.Inst.Tag = switch (ig.tree.tokenTag(op_token)) {
+    const tag: Ir.Inst.Tag = switch (token_tag) {
         .plus => .add,
         .minus => .sub,
         .asterisk => .mul,
@@ -925,6 +928,69 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir
         .tag = tag,
         .payload = .{ .binary = .{ .l = l, .r = r } },
     });
+}
+
+fn logicalOr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+    const binary = ig.tree.data(node).binary;
+
+    // always evaluate left, if its true, don't bother with right
+    const l = try ig.valExpr(scope, binary.left);
+    const br = try ig.reserve(.br);
+    const l_block = try ig.addBlock();
+    const r = try ig.valExpr(scope, binary.right);
+    const jmp = try ig.reserve(.jmp);
+    const r_block = try ig.addBlock();
+
+    const phi_data = try ig.addExtra(Ir.Inst.Phi{
+        .ty = .bool,
+        .src1 = l,
+        .block1 = l_block,
+        .src2 = r,
+        .block2 = r_block,
+    });
+    const phi = try ig.add(.{ .tag = .phi, .payload = .{ .extra = phi_data } });
+    const current = ig.currentBlock();
+
+    const branch_data = try ig.addExtra(Ir.Inst.Branch{
+        .exec_if = current,
+        .exec_else = r_block,
+    });
+    ig.update(br, .{ .unary_extra = .{ .op = l, .extra = branch_data } });
+    ig.update(jmp, .{ .block = current });
+
+    return phi;
+}
+
+fn logicalAnd(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+    const binary = ig.tree.data(node).binary;
+
+    // always evaluate left, if its true, don't bother with right
+    const l = try ig.valExpr(scope, binary.left);
+    const l_not = try ig.add(.{ .tag = .lnot, .payload = .{ .unary = l } });
+    const br = try ig.reserve(.br);
+    const l_block = try ig.addBlock();
+    const r = try ig.valExpr(scope, binary.right);
+    const jmp = try ig.reserve(.jmp);
+    const r_block = try ig.addBlock();
+
+    const phi_data = try ig.addExtra(Ir.Inst.Phi{
+        .ty = .bool,
+        .src1 = l,
+        .block1 = l_block,
+        .src2 = r,
+        .block2 = r_block,
+    });
+    const phi = try ig.add(.{ .tag = .phi, .payload = .{ .extra = phi_data } });
+    const current = ig.currentBlock();
+
+    const branch_data = try ig.addExtra(Ir.Inst.Branch{
+        .exec_if = current,
+        .exec_else = r_block,
+    });
+    ig.update(br, .{ .unary_extra = .{ .op = l_not, .extra = branch_data } });
+    ig.update(jmp, .{ .block = current });
+
+    return phi;
 }
 
 fn unaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
