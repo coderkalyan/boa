@@ -352,44 +352,35 @@ const Analysis = struct {
 };
 
 pub fn analyze(gpa: Allocator, ir: *const Ir) !Liveness {
-    var arena_allocator = std.heap.ArenaAllocator.init(gpa);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
+    // var arena_allocator = std.heap.ArenaAllocator.init(gpa);
+    // defer arena_allocator.deinit();
+    // const arena = arena_allocator.allocator();
 
     const dead = try gpa.alloc(u8, ir.insts.len);
     errdefer gpa.free(dead);
     @memset(dead, 0);
-    var special: std.AutoHashMapUnmanaged(Ir.Index, ExtraIndex) = .{};
+    const special: std.AutoHashMapUnmanaged(Ir.Index, ExtraIndex) = .{};
     var extra: std.ArrayListUnmanaged(u32) = .{};
-    var scratch: std.ArrayListUnmanaged(u32) = .{};
-
-    var analysis = try Analysis.init(gpa, arena, ir, dead, &special, &extra, &scratch);
-    while (true) {
-        var dirty = false;
-        var i = ir.blocks.len;
-        while (i > 0) {
-            i -= 1;
-            const block_dirty = try analysis.analyzeBlock(@enumFromInt(i));
-            dirty = dirty or block_dirty;
-
-            // std.debug.print("block{} in: ", .{i});
-            // var it = analysis.live_in[i].keyIterator();
-            // while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
-            // std.debug.print("\nblock{} out: ", .{i});
-            // it = analysis.live_out[i].keyIterator();
-            // while (it.next()) |key| std.debug.print("%{}, ", .{@intFromEnum(key.*)});
-            // std.debug.print("\n", .{});
-        }
-
-        // std.debug.print("\n", .{});
-        if (!dirty) break;
-    }
-
-    var i = ir.blocks.len;
-    while (i > 0) {
-        i -= 1;
-        try analysis.markDeadBits(@enumFromInt(i));
-    }
+    // var scratch: std.ArrayListUnmanaged(u32) = .{};
+    //
+    // var analysis = try Analysis.init(gpa, arena, ir, dead, &special, &extra, &scratch);
+    // while (true) {
+    //     var dirty = false;
+    //     var i = ir.blocks.len;
+    //     while (i > 0) {
+    //         i -= 1;
+    //         const block_dirty = try analysis.analyzeBlock(@enumFromInt(i));
+    //         dirty = dirty or block_dirty;
+    //     }
+    //
+    //     if (!dirty) break;
+    // }
+    //
+    // var i = ir.blocks.len;
+    // while (i > 0) {
+    //     i -= 1;
+    //     try analysis.markDeadBits(@enumFromInt(i));
+    // }
 
     return .{
         .dead = dead,

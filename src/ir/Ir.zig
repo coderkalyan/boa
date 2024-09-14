@@ -91,7 +91,7 @@ pub const Inst = struct {
         jmp,
         // branch conditionally to one of two blocks
         br,
-        // select between two phiparams
+        // select between two arguments based on entry block
         phi,
     };
 
