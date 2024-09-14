@@ -137,8 +137,6 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
 
 fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
     var inner = Scope.Block.init(ig, scope);
-    defer inner.deinit();
-
     try ig.blockInner(&inner.base, node);
 }
 
@@ -239,79 +237,18 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 
     ig.current_builder = if_builder;
     var inner_if = Scope.Block.init(ig, scope);
-    defer inner_if.deinit();
     try ig.blockInner(&inner_if.base, exec.exec_true);
     _ = try ig.current_builder.jmp(exit_builder.index);
     const exec_if = try ig.current_builder.seal();
 
     ig.current_builder = else_builder;
     var inner_else = Scope.Block.init(ig, scope);
-    defer inner_else.deinit();
     try ig.blockInner(&inner_else.base, exec.exec_false);
     _ = try ig.current_builder.jmp(exit_builder.index);
     const exec_else = try ig.current_builder.seal();
 
     ig.current_builder = exit_builder;
-    var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
-    try unionLocals(ig.arena, &.{ b, &inner_if, &inner_else }, &.{}, &union_locals);
-    var it = union_locals.iterator();
-    var phi_index: u32 = 0;
-    while (it.next()) |entry| : (phi_index += 1) {
-        const ident = entry.key_ptr.*;
-        const live_parent = b.vars.contains(ident);
-        const live_if = inner_if.vars.contains(ident);
-        const live_else = inner_else.vars.contains(ident);
-
-        // if variable not mutated inside the if statement, nothing to merge
-        if (!live_if and !live_else) continue;
-
-        const phi_data: Ir.Inst.Phi = if (live_if) phi: {
-            // three posibilities to merge:
-            // 1) defined in if and else -> merge two children (overwrites parent)
-            // 2) defined in if and parent -> merge child and parent
-            // 3) defined only in if -> merge with undef
-            if (live_else) {
-                break :phi .{
-                    .ty = ig.getTempIr().typeOf(inner_if.vars.get(ident).?),
-                    .src1 = inner_if.vars.get(ident).?,
-                    .block1 = exec_if,
-                    .src2 = inner_else.vars.get(ident).?,
-                    .block2 = exec_else,
-                };
-            } else if (live_parent) {
-                break :phi .{
-                    .ty = ig.getTempIr().typeOf(b.vars.get(ident).?),
-                    .src1 = b.vars.get(ident).?,
-                    .block1 = entry_block,
-                    .src2 = inner_if.vars.get(ident).?,
-                    .block2 = exec_if,
-                };
-            } else unreachable; // TODO: implement this
-        } else phi: {
-            // two posibilities to merge:
-            // 1) defined in else and parent -> merge child and parent
-            // 2) defined only in else -> merge with undef
-            if (live_parent) {
-                break :phi .{
-                    .ty = ig.getTempIr().typeOf(b.vars.get(ident).?),
-                    .src1 = b.vars.get(ident).?,
-                    .block1 = entry_block,
-                    .src2 = inner_else.vars.get(ident).?,
-                    .block2 = exec_else,
-                };
-            } else unreachable; // TODO: implement this
-        };
-
-        const phi = try ig.current_builder.phi(
-            phi_data.ty,
-            phi_data.src1,
-            phi_data.block1,
-            phi_data.src2,
-            phi_data.block2,
-        );
-        try b.vars.put(b.ig.arena, ident, phi);
-    }
-
+    try b.hoistMerge(&inner_if, exec_if, &inner_else, exec_else, entry_block);
     return br;
 }
 
@@ -343,9 +280,7 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     // create the block contexts for body and condition so we can reserve phis
     // for our locals
     var inner_body = Scope.Block.init(ig, scope);
-    defer inner_body.deinit();
     var inner_condition = Scope.Block.init(ig, scope);
-    defer inner_condition.deinit();
 
     // we need at least three other blocks - for condition, body, and exit
     const body_builder = try ig.createBlock();
@@ -466,9 +401,7 @@ fn forLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     // create the block contexts for body and condition so we can reserve phis
     // for our locals
     var inner_body = Scope.Block.init(ig, scope);
-    defer inner_body.deinit();
     var inner_condition = Scope.Block.init(ig, scope);
-    defer inner_condition.deinit();
 
     // we need at least three other blocks - for condition, body, and exit
     const body_builder = try ig.createBlock();
@@ -682,13 +615,7 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
 
-    // TODO: currently, we only support function scope (not modules)
-    // const func = scope.declScope().cast(Scope.Function).?;
     switch (ri.semantics) {
-        // since we're loading the variable to get a value, the identifier
-        // *must* exist - else error
-        // all variables are stack allocated from the IR's point of view, so
-        // insert a "load" to return the value of the variable
         .val => {
             const ident_scope = scope.resolveIdent(id) orelse {
                 std.debug.print("unknown identifier: {s}\n", .{ident_str});
@@ -699,34 +626,11 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
             // TODO: check if the type is undef-union and insert a guard
             const ident_block = ident_scope.cast(Scope.Block).?;
             return ident_block.vars.get(id).?;
-            // const alloc = ident_block.vars.get(id).?;
-            // return b.add(.{
-            //     .tag = .load,
-            //     .payload = .{ .unary = alloc },
-            // });
         },
         // since we're returning a variable to store to, if the identifer
         // doesn't exist we create (alloc) it
         // also, if the variable changed types, dealloc and realloc it
-        .ptr => {
-            // TODO: figure out the whole global business
-            // if (b.vars.get(id)) |alloc| {
-            //     _ = b.vars.remove(id);
-            //     _ = try b.add(.{
-            //         .tag = .dealloc,
-            //         .payload = .{ .unary = alloc },
-            //     });
-            // }
-
-            // const alloc = try b.add(.{
-            //     .tag = .alloc,
-            //     .payload = .{ .ip = ri.type_hint.? },
-            // });
-            // try b.vars.put(b.ig.arena, id, alloc);
-            //
-            // return alloc;
-            unreachable;
-        },
+        .ptr => unreachable, // TODO: potentially used for globals
     }
 }
 
@@ -867,7 +771,7 @@ fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
     return ig.current_builder.unary(.ret, operand);
 }
 
-fn getTempIr(ig: *const IrGen) Ir {
+pub fn getTempIr(ig: *const IrGen) Ir {
     return .{
         .pool = ig.pool,
         .tree = ig.tree,

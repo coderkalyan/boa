@@ -92,97 +92,76 @@ pub const Block = struct {
 
     parent: *Scope,
     ig: *IrGen,
-    tree: *const Ast,
-    // list of instruction indices (in order) that represent a block body
-    insts: std.ArrayListUnmanaged(Ir.Index),
     vars: std.AutoHashMapUnmanaged(InternPool.Index, Ir.Index),
 
     pub fn init(ig: *IrGen, s: *Scope) Block {
         return .{
             .parent = s,
             .ig = ig,
-            .tree = ig.tree,
-            .insts = .{},
             .vars = .{},
         };
     }
 
-    pub fn deinit(b: *Block) void {
-        b.insts.deinit(b.ig.arena);
+    pub fn put(b: *Block, ident: InternPool.Index, inst: Ir.Index) !void {
+        try b.vars.put(b.ig.arena, ident, inst);
     }
 
-    pub inline fn addUnlinked(b: *Block, inst: Inst) !Ir.Index {
-        return b.ig.add(inst);
-    }
+    // variables that are defined in both a and b will be hoisted up
+    // into self with a phi, overwriting any existing definition in self
+    // variables that are defined in a ^ b will be hoisted up into
+    // self with phi or undef-phi, depending on if they exist in self or not
+    // variables not defined in either a or b, but existing in self, will
+    // be untouched
+    pub fn hoistMerge(
+        self: *Block,
+        a: *const Block,
+        a_bindex: Ir.BlockIndex,
+        b: *const Block,
+        b_bindex: Ir.BlockIndex,
+        self_bindex: ?Ir.BlockIndex,
+    ) !void {
+        const ig = self.ig;
 
-    pub inline fn reserveUnlinked(b: *Block, tag: Inst.Tag) !Ir.Index {
-        return b.ig.reserve(tag);
-    }
+        var it = a.vars.iterator();
+        while (it.next()) |entry| {
+            const ident = entry.key_ptr.*;
+            const a_inst = entry.value_ptr.*;
+            const a_ty = ig.getTempIr().typeOf(a_inst);
 
-    pub fn linkInst(b: *Block, inst: Ir.Index) !void {
-        return b.insts.append(b.ig.arena, inst);
-    }
-
-    pub fn add(b: *Block, inst: Inst) !Ir.Index {
-        const index = try b.addUnlinked(inst);
-        try b.linkInst(index);
-        return index;
-    }
-
-    pub fn reserve(b: *Block, tag: Inst.Tag) !Ir.Index {
-        const index = try b.reserveUnlinked(tag);
-        try b.linkInst(index);
-        return index;
-    }
-
-    pub fn update(b: *Block, index: Ir.Index, payload: Inst.Payload) void {
-        b.ig.update(index, payload);
-    }
-
-    pub fn addBlock(b: *Block, inner: *Block) !Ir.BlockIndex {
-        const ig = b.ig;
-
-        const scratch_top = ig.scratch.items.len;
-        defer ig.scratch.shrinkRetainingCapacity(scratch_top);
-        try ig.scratch.ensureUnusedCapacity(ig.arena, inner.insts.items.len);
-
-        for (inner.insts.items) |inst| {
-            ig.scratch.appendAssumeCapacity(@intFromEnum(inst));
+            if (b.vars.get(ident)) |b_inst| {
+                const b_ty = ig.getTempIr().typeOf(b_inst);
+                // TODO: support type merging
+                std.debug.assert(a_ty == b_ty);
+                const phi = try ig.current_builder.phi(a_ty, a_inst, a_bindex, b_inst, b_bindex);
+                try self.put(ident, phi);
+            } else if (self_bindex != null and self.vars.contains(ident)) {
+                const self_inst = self.vars.get(ident).?;
+                const self_ty = ig.getTempIr().typeOf(self_inst);
+                // TODO: support type merging
+                std.debug.assert(a_ty == self_ty);
+                const phi = try ig.current_builder.phi(a_ty, a_inst, a_bindex, self_inst, self_bindex.?);
+                try self.put(ident, phi);
+            } else unreachable; // TODO: undef-phi
         }
-        const insts = ig.scratch.items[scratch_top..];
-        const slice = try ig.addSlice(insts);
 
-        const index: u32 = @intCast(ig.blocks.items.len);
-        try ig.blocks.append(ig.gpa, slice);
-        return @enumFromInt(index);
+        it = b.vars.iterator();
+        while (it.next()) |entry| {
+            const ident = entry.key_ptr.*;
+            const b_inst = entry.value_ptr.*;
+            const b_ty = ig.getTempIr().typeOf(b_inst);
+
+            // we already merge these
+            if (a.vars.contains(ident)) continue;
+            if (self_bindex != null and self.vars.contains(ident)) {
+                const self_inst = self.vars.get(ident).?;
+                const self_ty = ig.getTempIr().typeOf(self_inst);
+                // TODO: support type merging
+                std.debug.assert(b_ty == self_ty);
+                const phi = try ig.current_builder.phi(b_ty, b_inst, b_bindex, self_inst, self_bindex.?);
+                try self.put(ident, phi);
+            } else unreachable; // TODO: undef-phi
+        }
     }
-
-    // pub inline fn declare(b: *Block, ident: InternPool.Index, inst: Ir.Index) !void {
-    //     std.debug.assert(!b.vars.contains(ident));
-    //     try b.vars.put(b.ig.arena, ident, inst);
-    // }
-    //
-    // pub inline fn remove(b: *Block, ident: InternPool.Index) !void {
-    //     try b.vars.remove(ident);
-    // }
-
-    // pub fn addBranchDouble(b: *Block, cond: Ir.Index, exec_true: Ir.Index, exec_false: Ir.Index, node: Node.Index) !Ir.Index {
-    //     const pl = try b.ig.addExtra(Inst.BranchDouble{
-    //         .exec_true = exec_true,
-    //         .exec_false = exec_false,
-    //     });
-    //     return b.add(.{
-    //         .data = .{ .branch_double = .{ .cond = cond, .pl = pl } },
-    //         .loc = .{ .node = node },
-    //     });
-    // }
-    //
-    // pub fn addLoopWhile(b: *Block, cond: Ir.Index, body: Ir.Index, node: Node.Index) !Ir.Index {
-    //     return b.add(.{
-    //         .data = .{ .loop_while = .{ .cond = cond, .body = body } },
-    //         .loc = .{ .node = node },
-    //     });
-    // }
 };
 
 // pub const LocalType = struct {
