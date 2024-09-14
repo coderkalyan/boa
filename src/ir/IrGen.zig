@@ -246,6 +246,7 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         .assign_simple => ig.assignSimple(scope, node),
         .if_else => ig.ifElse(scope, node),
         .while_loop => ig.whileLoop(scope, node),
+        .for_loop => ig.forLoop(scope, node),
         .return_val => ig.returnVal(scope, node),
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
@@ -455,6 +456,7 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     // so we can use the phi assignment in the loop body generation below
     var body_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
     try ig.blockLocals(scope, while_loop.body, &body_locals);
+    // TODO: should anything else be unioned here?
     var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
     try unionLocals(ig.arena, &.{b}, &.{&body_locals}, &union_locals);
 
@@ -509,6 +511,160 @@ fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const phis = ig.scratch.items[scratch_top..];
     for (phis) |phi| try ig.linkInst(@enumFromInt(phi));
     const condition = try ig.valExpr(&inner_condition.base, while_loop.condition);
+    const br = try ig.reserve(.br);
+    const condition_block = try ig.addBlock();
+
+    // update the condition/body phis to point to the vars that we know now
+    for (mutated_locals.items, phis) |ident, phi| {
+        const phi_data = ig.getTempIr().instPayload(@enumFromInt(phi)).extra;
+        // TODO: cleaner way to patch this
+        const src_body = @intFromEnum(inner_body.vars.get(ident).?);
+        ig.extra.items[@intFromEnum(phi_data) + 3] = src_body;
+        ig.extra.items[@intFromEnum(phi_data) + 4] = @intFromEnum(body);
+    }
+
+    const exit = ig.currentBlock();
+    ig.update(jmp1, .{ .block = condition_block });
+    ig.update(jmp2, .{ .block = condition_block });
+    const branch = try ig.addExtra(Inst.Branch{
+        .exec_if = body,
+        .exec_else = exit,
+    });
+    ig.update(br, .{ .unary_extra = .{ .op = condition, .extra = branch } });
+
+    return br;
+}
+
+const RangeIterable = struct {
+    start: ?Node.Index,
+    stop: Node.Index,
+    step: ?Node.Index,
+};
+
+fn desugarRangeIterable(ig: *IrGen, iterable: Node.Index) !?RangeIterable {
+    if (ig.tree.tag(iterable) != .call) return null;
+    const call_data = ig.tree.data(iterable).call;
+    const main_token = ig.tree.mainToken(call_data.ptr);
+    const ident = ig.tree.tokenString(main_token);
+    if (!std.mem.eql(u8, ident, "range")) return null;
+
+    // at this point we know we have a range, just figure out how many
+    // explicit args it has an fill in the implicit ones (start = 0, step = 1)
+    const args_slice = ig.tree.extraData(call_data.args, Node.ExtraSlice);
+    const args = ig.tree.extraSlice(args_slice);
+    return switch (args.len) {
+        1 => .{ .start = null, .stop = args[0], .step = null },
+        2 => .{ .start = args[0], .stop = args[1], .step = null },
+        3 => .{ .start = args[0], .stop = args[1], .step = args[2] },
+        else => null,
+    };
+}
+
+fn forLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const b = scope.cast(Scope.Block).?;
+    const for_loop = ig.tree.data(node).for_loop;
+    const signature = ig.tree.extraData(for_loop.signature, Node.ForSignature);
+    const target_token = ig.tree.mainToken(signature.target);
+    const target = try ig.pool.put(.{ .str = ig.tree.tokenString(target_token) });
+
+    const range = (try ig.desugarRangeIterable(signature.iterable)) orelse {
+        std.debug.print("currently only range based for loops are supported\n", .{});
+        return ig.unexpectedNode(node);
+    };
+    std.debug.print("{}\n", .{range});
+
+    // loops have multiple types of phis:
+    // 1) top of body: between entry and bottom of loop body
+    // 2) exit: between entry and bottom of loop body
+    // more for control flow change (break, continue)
+    // consider all locals defined anywhere, with a pre-pass over the loop body
+    // so we can use the phi assignment in the loop body generation below
+    var body_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+    try ig.blockLocals(scope, for_loop.body, &body_locals);
+    var union_locals: std.AutoHashMapUnmanaged(InternPool.Index, void) = .{};
+    try unionLocals(ig.arena, &.{b}, &.{&body_locals}, &union_locals);
+
+    // prune to only the ones that are mutated in the loop body and need merging
+    var mutated_locals: std.ArrayListUnmanaged(InternPool.Index) = .{};
+    try mutated_locals.ensureTotalCapacity(ig.arena, body_locals.count() + 1);
+    var it = union_locals.iterator();
+    while (it.next()) |entry| {
+        const ident = entry.key_ptr.*;
+        if (body_locals.contains(ident)) mutated_locals.appendAssumeCapacity(ident);
+    }
+    mutated_locals.appendAssumeCapacity(target);
+
+    // create the block contexts for body and condition so we can reserve phis
+    // for our locals
+    var inner_body = Scope.Block.init(ig, scope);
+    defer inner_body.deinit();
+    var inner_condition = Scope.Block.init(ig, scope);
+    defer inner_condition.deinit();
+
+    // initialize the target to a starting value
+    const start = if (range.start) |s| inst: {
+        break :inst try ig.valExpr(scope, s);
+    } else try ig.add(.{ .tag = .constant, .payload = .{ .ip = .izero } });
+    try b.vars.put(ig.arena, target, start);
+    defer _ = b.vars.remove(target);
+    // jump from entry to condition
+    const jmp1 = try ig.reserve(.jmp);
+    const entry_block = try ig.addBlock();
+
+    // reserve phis for each mutated local
+    const scratch_top = ig.scratch.items.len;
+    defer ig.scratch.shrinkRetainingCapacity(scratch_top);
+    try ig.scratch.ensureUnusedCapacity(ig.arena, mutated_locals.items.len);
+    for (mutated_locals.items) |ident| {
+        const src_entry = b.vars.get(ident).?;
+        const phi_data = try ig.addExtra(Inst.Phi{
+            .ty = ig.getTempIr().typeOf(src_entry),
+            .src1 = src_entry,
+            .block1 = entry_block,
+            .src2 = undefined,
+            .block2 = undefined,
+        });
+        const phi = try ig.addUnlinked(.{ .tag = .phi, .payload = .{ .extra = phi_data } });
+        ig.scratch.appendAssumeCapacity(@intFromEnum(phi));
+        try inner_condition.vars.put(ig.arena, ident, phi);
+        try inner_body.vars.put(ig.arena, ident, phi);
+        try b.vars.put(ig.arena, ident, phi);
+    }
+
+    // generate the body
+    try ig.blockInner(&inner_body.base, for_loop.body);
+    // and the afterthought (increment/decrement by range)
+    const increment = if (range.step) |s| inst: {
+        break :inst try ig.valExpr(scope, s);
+    } else try ig.add(.{ .tag = .constant, .payload = .{ .ip = .ione } });
+    const afterthought = try ig.add(.{
+        .tag = .add,
+        .payload = .{
+            .binary = .{
+                .l = inner_body.vars.get(target).?,
+                .r = increment,
+            },
+        },
+    });
+    try inner_body.vars.put(ig.arena, target, afterthought);
+    const jmp2 = try ig.reserve(.jmp);
+    const body = try ig.addBlock();
+
+    // generate the condition, inside its own block since its an arbitrarily complex
+    // expression that needs to execute every loop iteration (not just once like if/else)
+    // the phis are actually placed in the condition block
+    const phis = ig.scratch.items[scratch_top..];
+    for (phis) |phi| try ig.linkInst(@enumFromInt(phi));
+    const stop = try ig.valExpr(scope, range.stop);
+    const condition = try ig.add(.{
+        .tag = .lt,
+        .payload = .{
+            .binary = .{
+                .l = b.vars.get(target).?,
+                .r = stop,
+            },
+        },
+    });
     const br = try ig.reserve(.br);
     const condition_block = try ig.addBlock();
 

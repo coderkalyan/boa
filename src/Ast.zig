@@ -362,12 +362,16 @@ pub fn data(tree: *const Ast, node: Node.Index) Node.Data {
     return tree.nodes.items(.data)[node];
 }
 
+pub fn tag(tree: *const Ast, node: Node.Index) Node.Tag {
+    return tree.nodes.items(.data)[node];
+}
+
 pub fn locateClosingBrace(tree: *const Ast, open: TokenIndex) TokenIndex {
     var depth: u32 = 1;
     var cur: TokenIndex = open + 1;
     while (true) : (cur += 1) {
-        const tag = tree.tokens.items(.tag)[cur];
-        switch (tag) {
+        const token_tag = tree.tokens.items(.tag)[cur];
+        switch (token_tag) {
             .l_brace => depth += 1,
             .r_brace => {
                 depth -= 1;
