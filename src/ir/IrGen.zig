@@ -183,7 +183,7 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !void {
         .while_loop => try ig.whileLoop(scope, node),
         .for_loop => try ig.forLoop(scope, node),
         .return_val => try ig.returnVal(scope, node),
-        // .pass => return,
+        .pass => {},
         else => {
             std.debug.print("unimplemented tag: {}\n", .{tag});
             unreachable;
