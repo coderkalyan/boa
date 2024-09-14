@@ -95,7 +95,7 @@ pub fn main() !void {
                 try buffered_out.flush();
             }
             try writer.print("{}\n\n", .{bytecode.code.len});
-            // try interpret(gpa, &bytecode);
+            try interpret(gpa, &bytecode);
         }
     }
 }
