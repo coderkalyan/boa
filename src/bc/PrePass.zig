@@ -12,6 +12,7 @@ ranges: []const Ir.Index,
 pub const PhiMarker = struct {
     operand: Ir.Index,
     phi: Ir.Index,
+    dest_block: BlockIndex,
 };
 
 const Context = struct {
@@ -39,8 +40,8 @@ const Context = struct {
                 .br => {
                     const extra = ir.instPayload(inst).unary_extra.extra;
                     const branch = ir.extraData(Ir.Inst.Branch, extra);
-                    const temp = try self.recordPostOrderDfs(branch.exec_else, i);
-                    break :n try self.recordPostOrderDfs(branch.exec_if, temp);
+                    const temp = try self.recordPostOrderDfs(branch.exec_if, i);
+                    break :n try self.recordPostOrderDfs(branch.exec_else, temp);
                 },
                 .ret => i,
                 else => unreachable,
@@ -58,8 +59,8 @@ const Context = struct {
                 const phi = ir.extraData(Ir.Inst.Phi, extra);
                 const block1 = @intFromEnum(phi.block1);
                 const block2 = @intFromEnum(phi.block2);
-                try self.phis[block1].append(self.arena, .{ .operand = phi.src1, .phi = inst });
-                try self.phis[block2].append(self.arena, .{ .operand = phi.src2, .phi = inst });
+                try self.phis[block1].append(self.arena, .{ .operand = phi.src1, .phi = inst, .dest_block = current });
+                try self.phis[block2].append(self.arena, .{ .operand = phi.src2, .phi = inst, .dest_block = current });
                 continue;
             }
         }
@@ -103,8 +104,6 @@ const Context = struct {
             .bxor,
             .sll,
             .sra,
-            .lor,
-            .land,
             .eq,
             .ne,
             .lt,

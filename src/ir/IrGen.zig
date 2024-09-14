@@ -301,7 +301,7 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 
     var inner_else = Scope.Block.init(ig, scope);
     defer inner_else.deinit();
-    try ig.blockInner(&inner_else.base, exec.exec_true);
+    try ig.blockInner(&inner_else.base, exec.exec_false);
     const jmp2 = try ig.reserve(.jmp);
     const exec_else = try ig.addBlock();
 
@@ -762,8 +762,6 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir
         .caret => .bxor,
         .l_angle_l_angle => .sll,
         .r_angle_r_angle => .sra,
-        .k_or => .lor,
-        .k_and => .land,
         else => unreachable,
     };
 

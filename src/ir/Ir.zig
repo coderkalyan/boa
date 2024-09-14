@@ -72,10 +72,6 @@ pub const Inst = struct {
         sll,
         // arithmetic shift right
         sra,
-        // boolean or
-        lor,
-        // boolean and
-        land,
         // equal
         eq,
         // not equal
@@ -190,7 +186,6 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         => ir.typeOf(payload.binary.l),
         .neg => ir.typeOf(payload.unary),
         .bor, .band, .bxor, .sll, .sra => .int,
-        .lor, .land => .bool,
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
@@ -218,8 +213,6 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .bxor,
         .sll,
         .sra,
-        .lor,
-        .land,
         .eq,
         .ne,
         .lt,
@@ -262,8 +255,6 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
         .bxor,
         .sll,
         .sra,
-        .lor,
-        .land,
         .eq,
         .ne,
         .lt,

@@ -258,8 +258,6 @@ const Analysis = struct {
             .bxor,
             .sll,
             .sra,
-            .lor,
-            .land,
             .eq,
             .ne,
             .lt,

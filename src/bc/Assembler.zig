@@ -19,12 +19,17 @@ code: Bytecode.List,
 register_count: u32,
 register_map: std.AutoHashMapUnmanaged(Ir.Index, Bytecode.Register),
 free_registers: std.ArrayListUnmanaged(Bytecode.Register),
-// some instructions, like phis, keep track of the mapping
-// from Ir index to bytecode index, so they can be updated later
-inst_map: std.AutoHashMapUnmanaged(Ir.Index, u32),
 scratch: std.ArrayListUnmanaged(u32),
 order: []const Ir.BlockIndex,
 phis: []const std.ArrayListUnmanaged(PrePass.PhiMarker),
+ranges: []const Ir.Index,
+patch: []std.ArrayListUnmanaged(Patch),
+block_starts: std.AutoHashMapUnmanaged(Ir.BlockIndex, u32),
+
+const Patch = struct {
+    ir_inst: Ir.Index,
+    bc_inst: u32,
+};
 
 const Slot = struct {
     inst: Ir.Index,
@@ -47,6 +52,9 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     //     std.debug.print("\n", .{});
     // }
 
+    const patch = try arena.alloc(std.ArrayListUnmanaged(Patch), ir.blocks.len);
+    @memset(patch, .{});
+
     var assembler: Assembler = .{
         .gpa = gpa,
         .arena = arena,
@@ -56,14 +64,19 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .register_count = 0,
         .free_registers = .{},
         .register_map = .{},
-        .inst_map = .{},
         .scratch = .{},
         .order = prepass.order,
         .phis = prepass.phis,
+        .ranges = prepass.ranges,
+        .patch = patch,
+        .block_starts = .{},
     };
 
-    for (prepass.order) |block| try assembler.generateBlock(block);
-    // try assembler.add(.exit, undefined);
+    for (0..prepass.order.len) |i| {
+        const current = prepass.order[i];
+        const next = if (i == prepass.order.len - 1) undefined else prepass.order[i + 1];
+        try assembler.generateBlock(current, next);
+    }
 
     return .{
         .ir = ir,
@@ -71,53 +84,69 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     };
 }
 
-fn updateLiveRangeCount(self: *Assembler, block: Ir.BlockIndex) !void {
+fn generateBlock(
+    self: *Assembler,
+    current_block: Ir.BlockIndex,
+    next_block: Ir.BlockIndex,
+) error{OutOfMemory}!void {
     const ir = self.ir;
-    const n = @intFromEnum(block);
-    if (self.visited[n]) return;
-    self.visited[n] = true;
+    const n = @intFromEnum(current_block);
+    try self.block_starts.put(self.arena, current_block, @intCast(self.code.len));
 
-    const insts: []const Ir.Index = @ptrCast(ir.extraSlice(ir.blocks[n].insts));
+    const insts = ir.extraSlice(ir.blocks[n].insts);
+    try self.startBlock(current_block);
     for (insts) |inst| {
-        var ops: [2]Ir.Index = undefined;
-        for (ir.operands(inst, &ops)) |operand| {
-            self.live_range_count[@intFromEnum(operand)] += 1;
+        // TODO: clean this up
+        switch (ir.instTag(@enumFromInt(inst))) {
+            .jmp, .br, .ret => {},
+            else => try self.generateInst(@enumFromInt(inst), current_block, next_block),
         }
-
-        switch (ir.instTag(inst)) {
-            .jmp => try self.updateLiveRangeCount(ir.instPayload(inst).block),
-            .br => {
-                const extra = ir.instPayload(inst).unary_extra.extra;
-                const branch = ir.extraData(Ir.Inst.Branch, extra);
-                try self.updateLiveRangeCount(branch.exec_if);
-                try self.updateLiveRangeCount(branch.exec_else);
-            },
+    }
+    try self.endBlock(current_block);
+    for (insts) |inst| {
+        // TODO: clean this up
+        switch (ir.instTag(@enumFromInt(inst))) {
+            .jmp,
+            .br,
+            .ret,
+            => try self.generateInst(@enumFromInt(inst), current_block, next_block),
             else => {},
         }
     }
 }
 
-fn generateBlock(self: *Assembler, block: Ir.BlockIndex) error{OutOfMemory}!void {
-    const ir = self.ir;
-    const n = @intFromEnum(block);
-    if (self.visited[n]) return;
-    self.visited[n] = true;
-
-    const insts = ir.extraSlice(ir.blocks[n].insts);
-    for (insts) |inst| {
-        try self.generateInst(block, @enumFromInt(inst));
+fn startBlock(self: *Assembler, block: Ir.BlockIndex) !void {
+    for (self.patch[@intFromEnum(block)].items) |patch| {
+        try self.patchInst(block, @intCast(self.code.len), patch);
     }
 }
 
-fn generateInst(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
+fn endBlock(self: *Assembler, block: Ir.BlockIndex) !void {
+    const c = @intFromEnum(block);
+    for (self.phis[c].items) |phi_marker| {
+        // if (self.elideInst(phi_marker.phi)) continue;
+        const src = self.register_map.get(phi_marker.operand).?;
+        const mov = try self.reserve(.mov);
+        self.update(mov, .{ .dst = undefined, .ops = .{ .unary = src } });
+        try self.markPatch(block, phi_marker.dest_block, phi_marker.phi, mov);
+    }
+}
+
+fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, next_block: Ir.BlockIndex) !void {
     const ir = self.ir;
-    const dead_bits = ir.liveness.deadBits(inst);
+    // this isn't a full dead code elimination pass, since it doesn't reason
+    // about dependency chains ending in an unused instruction
+    // however it is good at cleaning up "useless" instructions, especially phis
+    // at branch/loop exits which are used to export local variables across scopes,
+    // if they aren't used
+    // TODO: needs to drop dead operands
+    // if (self.elideInst(inst)) return;
 
     const index = @intFromEnum(inst);
     switch (ir.insts.items(.tag)[index]) {
         .constant => try self.constant(inst),
-        .itof => try self.itof(inst),
-        .ftoi => try self.ftoi(inst),
+        .itof,
+        .ftoi,
         .neg,
         .binv,
         .lnot,
@@ -140,42 +169,60 @@ fn generateInst(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
         .le,
         .ge,
         => try self.binaryOp(inst),
-        .lor => try self.lor(inst),
-        .land => try self.land(inst),
-        .jmp => try self.jmp(block, inst),
-        .br => try self.br(block, inst),
+        .jmp => try self.jmp(inst, current_block, next_block),
+        .br => try self.br(inst, current_block, next_block),
+        .ret => try self.ret(inst),
+        .phi => {}, // implemented in startBlock
         // .ret => unreachable, // TODO: implement
-        else => {},
-        // .if_else => try self.ifElse(inst),
-        // .loop => try self.loop(inst),
-        // .phi_if_else,
-        // .phi_entry_if,
-        // .phi_entry_else,
-        // .phi_entry_body_body,
-        // .phi_entry_body_exit,
-        // => {},
+        // else => {},
     }
-
-    // switch (ir.insts.items(.tag)[index]) {
-    //     .if_else, .loop => {},
-    //     else => if (dead_bits & 0x8 != 0) self.unassign(inst),
-    // }
-    if (dead_bits & 0x8 != 0) self.unassign(inst);
 }
 
 inline fn add(self: *Assembler, tag: Bytecode.Inst.Tag, payload: Bytecode.Inst.Payload) !void {
     try self.code.append(self.gpa, .{ .tag = tag, .payload = payload });
 }
 
-inline fn reserve(self: *Assembler, tag: Bytecode.Inst.Tag) !Bytecode.Register {
+inline fn reserve(self: *Assembler, tag: Bytecode.Inst.Tag) !u32 {
     const index: u32 = @intCast(self.code.len);
     try self.code.append(self.gpa, .{ .tag = tag, .payload = undefined });
-    return @enumFromInt(index);
+    return index;
 }
 
-inline fn update(self: *Assembler, inst: Bytecode.Register, payload: Bytecode.Inst.Payload) void {
-    const i = @intFromEnum(inst);
-    self.code.items(.payload)[i] = payload;
+inline fn update(self: *Assembler, inst: u32, payload: Bytecode.Inst.Payload) void {
+    self.code.items(.payload)[inst] = payload;
+}
+
+fn markPatch(self: *Assembler, current_block: Ir.BlockIndex, target_block: Ir.BlockIndex, ir_inst: Ir.Index, bc_inst: u32) !void {
+    const patch: Patch = .{ .ir_inst = ir_inst, .bc_inst = bc_inst };
+    if (self.block_starts.get(target_block)) |loc| {
+        try self.patchInst(current_block, loc, patch);
+    } else {
+        try self.patch[@intFromEnum(target_block)].append(self.arena, patch);
+    }
+}
+
+fn patchInst(self: *Assembler, current_block: Ir.BlockIndex, loc: u32, patch: Patch) !void {
+    const ir = self.ir;
+    const payload = ir.instPayload(patch.ir_inst);
+    switch (ir.instTag(patch.ir_inst)) {
+        .jmp => self.update(patch.bc_inst, .{ .dst = undefined, .ops = .{ .target = loc } }),
+        .br => {
+            const branch = ir.extraData(Ir.Inst.Branch, payload.unary_extra.extra);
+            if (branch.exec_if == current_block) {
+                self.code.items(.payload)[patch.bc_inst].ops.branch.target = loc;
+            }
+        },
+        .phi => {
+            if (self.register_map.get(patch.ir_inst)) |dst| {
+                self.code.items(.payload)[patch.bc_inst].dst = dst;
+            } else {
+                const dst = try self.allocate();
+                try self.register_map.put(self.arena, patch.ir_inst, dst);
+                self.code.items(.payload)[patch.bc_inst].dst = dst;
+            }
+        },
+        else => unreachable,
+    }
 }
 
 fn allocate(self: *Assembler) !Register {
@@ -215,11 +262,7 @@ fn assign(self: *Assembler, inst: Ir.Index) !Bytecode.Register {
 }
 
 fn unassign(self: *Assembler, inst: Ir.Index) void {
-    const i = @intFromEnum(inst);
-    self.live_range_count[i] -= 1;
-    if (self.live_range_count[i] > 0) return;
-
-    if (!self.register_map.contains(inst)) std.debug.print("no: {}\n", .{i});
+    // if (inst != self.ranges[@intFromEnum(cur)]) return;
     const index = self.register_map.get(inst).?;
     std.debug.assert(self.register_map.remove(inst));
     self.free_registers.appendAssumeCapacity(index);
@@ -229,9 +272,18 @@ fn unassignRegister(self: *Assembler, index: Bytecode.Register) void {
     self.free_registers.appendAssumeCapacity(index);
 }
 
-fn getSlot(self: *Assembler, inst: Ir.Index) Bytecode.Register {
-    if (!self.register_map.contains(inst)) std.debug.print("no: {}\n", .{@intFromEnum(inst)});
-    return self.register_map.get(inst).?;
+inline fn rangeEnd(self: *Assembler, inst: Ir.Index) Ir.Index {
+    return self.ranges[@intFromEnum(inst)];
+}
+
+fn elideInst(self: *Assembler, inst: Ir.Index) bool {
+    // instructions with side effects (like writing to memory or
+    // changing control flow) cannot be elided
+    // otherwise, instructions that die immediately (never use) are elided
+    return switch (self.ir.instTag(inst)) {
+        .br, .jmp, .ret => false,
+        else => self.rangeEnd(inst) == inst,
+    };
 }
 
 fn constant(self: *Assembler, inst: Ir.Index) !void {
@@ -272,32 +324,6 @@ fn constant(self: *Assembler, inst: Ir.Index) !void {
             .ops = .{ .imm = imm },
         });
     }
-}
-
-fn itof(self: *Assembler, inst: Ir.Index) !void {
-    const unary = self.ir.instPayload(inst).unary;
-    const operand = self.register_map.get(unary).?;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-    if (dead_bits & 0x1 != 0) self.deallocate(operand);
-    const dst = try self.allocate();
-    try self.register_map.put(self.arena, inst, dst);
-    try self.add(.itof, .{
-        .dst = dst,
-        .ops = .{ .unary = operand },
-    });
-}
-
-fn ftoi(self: *Assembler, inst: Ir.Index) !void {
-    const unary = self.ir.instPayload(inst).unary;
-    const operand = self.register_map.get(unary).?;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-    if (dead_bits & 0x1 != 0) self.deallocate(operand);
-    const dst = try self.allocate();
-    try self.register_map.put(self.arena, inst, dst);
-    try self.add(.ftoi, .{
-        .dst = dst,
-        .ops = .{ .unary = operand },
-    });
 }
 
 fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
@@ -341,12 +367,11 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
         else => unreachable,
     };
 
-    std.debug.print("binary: {s}, %{}\n", .{ @tagName(self.ir.instTag(inst)), binary.l });
+    // std.debug.print("binary: {s}, %{}\n", .{ @tagName(self.ir.instTag(inst)), binary.l });
     const l = self.register_map.get(binary.l).?;
     const r = self.register_map.get(binary.r).?;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-    if (dead_bits & 0x1 != 0) self.deallocate(l);
-    if (dead_bits & 0x2 != 0) self.deallocate(r);
+    if (self.rangeEnd(binary.l) == inst) self.deallocate(l);
+    if (self.rangeEnd(binary.r) == inst) self.deallocate(r);
 
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
@@ -372,12 +397,13 @@ fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
         },
         .binv => .binv,
         .lnot => .lnot,
+        .itof => .itof,
+        .ftoi => .ftoi,
         else => unreachable,
     };
 
     const operand = self.register_map.get(unary).?;
-    const dead_bits = self.ir.liveness.deadBits(inst);
-    if (dead_bits & 0x1 != 0) self.deallocate(operand);
+    if (self.rangeEnd(unary) == inst) self.deallocate(operand);
 
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
@@ -387,37 +413,35 @@ fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
     });
 }
 
-fn jmp(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
-    const jump = self.ir.instPayload(inst).block;
-    const next: Ir.BlockIndex = @enumFromInt(@intFromEnum(block) + 1);
-    if (jump != next) {
-        try self.add(.jump, .{
-            .dst = undefined,
-            .ops = .{ .target = @intCast(self.code.len) },
-        });
-    }
+fn jmp(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, next_block: Ir.BlockIndex) !void {
+    const target_block = self.ir.instPayload(inst).block;
+    if (next_block == target_block) return;
 
-    try self.generateBlock(jump);
+    const jump = try self.reserve(.jump);
+    try self.markPatch(current_block, target_block, inst, jump);
 }
 
-fn br(self: *Assembler, block: Ir.BlockIndex, inst: Ir.Index) !void {
-    _ = self;
-    _ = block;
+fn br(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, next_block: Ir.BlockIndex) !void {
+    const payload = self.ir.instPayload(inst).unary_extra;
+    const branch = self.ir.extraData(Ir.Inst.Branch, payload.extra);
+
+    const operand = self.register_map.get(payload.op).?;
+    if (self.rangeEnd(payload.op) == inst) self.deallocate(operand);
+
+    // TODO: an easy optimization here is to negate the operand if needed
+    if (branch.exec_if != next_block) {
+        const bc_inst = try self.reserve(.branch);
+        self.code.items(.payload)[bc_inst].ops = .{
+            .branch = .{
+                .condition = operand,
+                .target = undefined,
+            },
+        };
+        try self.markPatch(current_block, branch.exec_if, inst, bc_inst);
+    }
+}
+
+fn ret(self: *Assembler, inst: Ir.Index) !void {
     _ = inst;
-    // const payload = self.ir.instPayload(inst).unary_extra;
-    // const branch = self.ir.extraData(Ir.Inst.Branch, payload.extra);
-    //
-    // const operand = self.register_map.get(payload.op).?;
-    // const dead_bits = self.ir.liveness.deadBits(inst);
-    // if (dead_bits & 0x1 != 0) self.deallocate(operand);
-    // const next: Ir.BlockIndex = @enumFromInt(@intFromEnum(block) + 1);
-
-    // if (jump != next) {
-    //     try self.add(.jump, .{
-    //         .dst = undefined,
-    //         .ops = .{ .target = @intCast(self.code.len) },
-    //     });
-    // }
-
-    // try self.generateBlock(jump);
+    try self.add(.exit, undefined);
 }
