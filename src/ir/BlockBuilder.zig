@@ -10,12 +10,14 @@ const BlockIndex = Ir.BlockIndex;
 ig: *IrGen,
 index: BlockIndex,
 insts: std.ArrayListUnmanaged(Index),
+slot: u32,
 
-pub fn init(ig: *IrGen, index: BlockIndex) BlockBuilder {
+pub fn init(ig: *IrGen, index: BlockIndex, slot: u32) BlockBuilder {
     return .{
         .ig = ig,
         .index = index,
         .insts = .{},
+        .slot = slot,
     };
 }
 
@@ -26,7 +28,7 @@ pub fn seal(bb: *BlockBuilder) !BlockIndex {
 
     const i = @intFromEnum(bb.index);
     ig.blocks.items[i] = .{ .insts = insts };
-    try ig.free_builders.append(ig.arena, i);
+    try ig.free_builders.append(ig.arena, bb.slot);
     return index;
 }
 

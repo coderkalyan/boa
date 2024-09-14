@@ -76,7 +76,7 @@ fn createBlockAssumeCapacity(ig: *IrGen) *BlockBuilder {
 
     const slot = ig.free_builders.pop();
     const builder = ig.builders.at(slot);
-    builder.* = BlockBuilder.init(ig, @enumFromInt(index));
+    builder.* = BlockBuilder.init(ig, @enumFromInt(index), slot);
     return builder;
 }
 
