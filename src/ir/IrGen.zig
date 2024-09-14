@@ -999,7 +999,7 @@ fn unaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
 
     const operand = try ig.valExpr(scope, unary);
     const tag: Ir.Inst.Tag = switch (ig.tree.tokenTag(op_token)) {
-        .plus => unreachable, // TODO: implement this? or no-op
+        .plus => return operand,
         .minus => .neg,
         .tilde => .binv,
         .k_not => .lnot,
