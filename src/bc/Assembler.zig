@@ -43,9 +43,9 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
 
     const entry: Ir.BlockIndex = @enumFromInt(0);
     const prepass = try PrePass.analyze(arena, ir, entry);
-    for (prepass.order) |i| std.debug.print("{}, ", .{@intFromEnum(i)});
-    std.debug.print("\n", .{});
-    for (prepass.ranges, 0..) |end, start| std.debug.print("%{}..%{}\n", .{ start, @intFromEnum(end) });
+    // for (prepass.order) |i| std.debug.print("{}, ", .{@intFromEnum(i)});
+    // std.debug.print("\n", .{});
+    // for (prepass.ranges, 0..) |end, start| std.debug.print("%{}..%{}\n", .{ start, @intFromEnum(end) });
     // for (0..ir.blocks.len) |i| {
     //     std.debug.print("block{}: ", .{i});
     //     for (prepass.phis[i].items) |phi| std.debug.print("%{} -> %{}, ", .{ @intFromEnum(phi.operand), @intFromEnum(phi.phi) });
