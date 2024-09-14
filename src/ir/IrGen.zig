@@ -179,6 +179,7 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !void {
     const tag = ig.tree.data(node);
     _ = switch (tag) {
         .assign_simple => try ig.assignSimple(scope, node),
+        .if_simple => try ig.ifSimple(scope, node),
         .if_else => try ig.ifElse(scope, node),
         .while_loop => try ig.whileLoop(scope, node),
         .for_loop => try ig.forLoop(scope, node),
@@ -220,6 +221,30 @@ fn unionLocals(
     }
 }
 
+fn ifSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const b = scope.cast(Scope.Block).?;
+    const if_simple = ig.tree.data(node).if_simple;
+
+    // we need at least two other blocks - for if and exit
+    const if_builder = try ig.createBlock();
+    const exit_builder = try ig.createBlock();
+
+    // the condition can be evaluated in the entry block (current)
+    const cond = try ig.valExpr(scope, if_simple.condition);
+    const br = try ig.current_builder.br(cond, if_builder.index, exit_builder.index);
+    const entry_block = try ig.current_builder.seal();
+
+    ig.current_builder = if_builder;
+    var inner_if = Scope.Block.init(ig, scope);
+    try ig.blockInner(&inner_if.base, if_simple.exec_true);
+    _ = try ig.current_builder.jmp(exit_builder.index);
+    const exec_if = try ig.current_builder.seal();
+
+    ig.current_builder = exit_builder;
+    try b.hoistMergeSingle(&inner_if, exec_if, entry_block);
+    return br;
+}
+
 fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const b = scope.cast(Scope.Block).?;
     const if_else = ig.tree.data(node).if_else;
@@ -248,7 +273,7 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const exec_else = try ig.current_builder.seal();
 
     ig.current_builder = exit_builder;
-    try b.hoistMerge(&inner_if, exec_if, &inner_else, exec_else, entry_block);
+    try b.hoistMergeDouble(&inner_if, exec_if, &inner_else, exec_else, entry_block);
     return br;
 }
 

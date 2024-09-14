@@ -106,19 +106,49 @@ pub const Block = struct {
         try b.vars.put(b.ig.arena, ident, inst);
     }
 
+    // variables that are defined in a and self will be hoisted into self
+    // with a phi of both definitions
+    // variables that are defined only in a will be hoisted into self
+    // with an undef-phi
+    // variables not defined in a, but existing in self, will
+    // be untouched
+    pub fn hoistMergeSingle(
+        self: *Block,
+        a: *const Block,
+        a_bindex: Ir.BlockIndex,
+        self_bindex: Ir.BlockIndex,
+    ) !void {
+        const ig = self.ig;
+
+        var it = a.vars.iterator();
+        while (it.next()) |entry| {
+            const ident = entry.key_ptr.*;
+            const a_inst = entry.value_ptr.*;
+            const a_ty = ig.getTempIr().typeOf(a_inst);
+
+            if (self.vars.get(ident)) |self_inst| {
+                const self_ty = ig.getTempIr().typeOf(self_inst);
+                // TODO: support type merging
+                std.debug.assert(a_ty == self_ty);
+                const phi = try ig.current_builder.phi(a_ty, a_inst, a_bindex, self_inst, self_bindex);
+                try self.put(ident, phi);
+            } else unreachable; // TODO: undef-phi
+        }
+    }
+
     // variables that are defined in both a and b will be hoisted up
     // into self with a phi, overwriting any existing definition in self
     // variables that are defined in a ^ b will be hoisted up into
     // self with phi or undef-phi, depending on if they exist in self or not
     // variables not defined in either a or b, but existing in self, will
     // be untouched
-    pub fn hoistMerge(
+    pub fn hoistMergeDouble(
         self: *Block,
         a: *const Block,
         a_bindex: Ir.BlockIndex,
         b: *const Block,
         b_bindex: Ir.BlockIndex,
-        self_bindex: ?Ir.BlockIndex,
+        self_bindex: Ir.BlockIndex,
     ) !void {
         const ig = self.ig;
 
@@ -134,12 +164,11 @@ pub const Block = struct {
                 std.debug.assert(a_ty == b_ty);
                 const phi = try ig.current_builder.phi(a_ty, a_inst, a_bindex, b_inst, b_bindex);
                 try self.put(ident, phi);
-            } else if (self_bindex != null and self.vars.contains(ident)) {
-                const self_inst = self.vars.get(ident).?;
+            } else if (self.vars.get(ident)) |self_inst| {
                 const self_ty = ig.getTempIr().typeOf(self_inst);
                 // TODO: support type merging
                 std.debug.assert(a_ty == self_ty);
-                const phi = try ig.current_builder.phi(a_ty, a_inst, a_bindex, self_inst, self_bindex.?);
+                const phi = try ig.current_builder.phi(a_ty, a_inst, a_bindex, self_inst, self_bindex);
                 try self.put(ident, phi);
             } else unreachable; // TODO: undef-phi
         }
@@ -152,12 +181,11 @@ pub const Block = struct {
 
             // we already merge these
             if (a.vars.contains(ident)) continue;
-            if (self_bindex != null and self.vars.contains(ident)) {
-                const self_inst = self.vars.get(ident).?;
+            if (self.vars.get(ident)) |self_inst| {
                 const self_ty = ig.getTempIr().typeOf(self_inst);
                 // TODO: support type merging
                 std.debug.assert(b_ty == self_ty);
-                const phi = try ig.current_builder.phi(b_ty, b_inst, b_bindex, self_inst, self_bindex.?);
+                const phi = try ig.current_builder.phi(b_ty, b_inst, b_bindex, self_inst, self_bindex);
                 try self.put(ident, phi);
             } else unreachable; // TODO: undef-phi
         }
