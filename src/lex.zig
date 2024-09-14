@@ -434,7 +434,7 @@ pub const Lexer = struct {
                     // TODO: support other types of return (CR)
                     '\n' => {
                         spaces = 0;
-                        state = .start;
+                        state = .indent;
                         result.loc.start = self.index + 1;
                     },
                     else => {
