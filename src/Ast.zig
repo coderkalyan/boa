@@ -185,7 +185,7 @@ pub const Node = struct {
 
         // empty return 'return'
         // main_token = 'return'
-        // return_void: void,
+        return_none: void,
         // return value 'return 5'
         // main_token = 'return'
         return_val: Index,

@@ -24,9 +24,16 @@ pub fn init(ig: *IrGen, index: BlockIndex, slot: u32) BlockBuilder {
 pub fn seal(bb: *BlockBuilder) !BlockIndex {
     const ig = bb.ig;
     const index = bb.index;
-    const insts = try ig.addSlice(@ptrCast(bb.insts.items));
-
     const i = @intFromEnum(bb.index);
+
+    // if the block doesn't end in a terminator, add an implicit
+    // return none
+    switch (ig.getTempIr().instTag(bb.insts.items[bb.insts.items.len - 1])) {
+        .jmp, .br, .ret => {},
+        else => _ = try bb.unary(.ret, try bb.constant(.none)),
+    }
+
+    const insts = try ig.addSlice(@ptrCast(bb.insts.items));
     ig.blocks.items[i] = .{ .insts = insts };
     try ig.free_builders.append(ig.arena, bb.slot);
     return index;

@@ -747,10 +747,13 @@ const Parser = struct {
 
     fn ret(p: *Parser) !Node.Index {
         const ret_token = try p.expect(.k_return);
-        const return_val = if (p.current() == .newline) null_node else try p.expression();
         return p.addNode(.{
             .main_token = ret_token,
-            .data = .{ .return_val = return_val },
+            .data = if (p.current() == .newline) .{
+                .return_none = {},
+            } else .{
+                .return_val = try p.expression(),
+            },
         });
     }
 

@@ -183,12 +183,10 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !void {
         .if_else => try ig.ifElse(scope, node),
         .while_loop => try ig.whileLoop(scope, node),
         .for_loop => try ig.forLoop(scope, node),
+        .return_none => try ig.returnNone(scope, node),
         .return_val => try ig.returnVal(scope, node),
         .pass => {},
-        else => {
-            std.debug.print("unimplemented tag: {}\n", .{tag});
-            unreachable;
-        },
+        else => ig.unexpectedNode(node),
     };
 }
 
@@ -788,6 +786,13 @@ fn binaryFloatDecay(ig: *IrGen, l: *Ir.Index, r: *Ir.Index) !void {
         .bool => {},
         else => unreachable,
     }
+}
+
+fn returnNone(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+    _ = scope;
+    _ = node;
+    const operand = try ig.current_builder.constant(.none);
+    return ig.current_builder.unary(.ret, operand);
 }
 
 fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
