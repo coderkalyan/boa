@@ -28,9 +28,13 @@ pub fn seal(bb: *BlockBuilder) !BlockIndex {
 
     // if the block doesn't end in a terminator, add an implicit
     // return none
-    switch (ig.getTempIr().instTag(bb.insts.items[bb.insts.items.len - 1])) {
-        .jmp, .br, .ret => {},
-        else => _ = try bb.unary(.ret, try bb.constant(.none)),
+    if (bb.insts.items.len == 0) {
+        _ = try bb.unary(.ret, try bb.constant(.none));
+    } else {
+        switch (ig.getTempIr().instTag(bb.insts.items[bb.insts.items.len - 1])) {
+            .jmp, .br, .ret => {},
+            else => _ = try bb.unary(.ret, try bb.constant(.none)),
+        }
     }
 
     const insts = try ig.addSlice(@ptrCast(bb.insts.items));

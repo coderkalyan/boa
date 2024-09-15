@@ -173,8 +173,6 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
         .br => try self.br(inst, current_block, next_block),
         .ret => try self.ret(inst),
         .phi => {}, // implemented in startBlock
-        // .ret => unreachable, // TODO: implement
-        // else => {},
     }
 }
 
