@@ -71,7 +71,7 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .patch = patch,
         .block_starts = .{},
     };
-
+    try assembler.add(.pool, .{ .dst = undefined, .ops = .{ .pool = pool } });
     for (0..prepass.order.len) |i| {
         const current = prepass.order[i];
         const next = if (i == prepass.order.len - 1) undefined else prepass.order[i + 1];
@@ -79,7 +79,7 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     }
 
     return .{
-        .ir = ir,
+        .register_count = assembler.register_count,
         .code = assembler.code.toOwnedSlice(),
     };
 }
@@ -145,6 +145,8 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
     const index = @intFromEnum(inst);
     switch (ir.insts.items(.tag)[index]) {
         .constant => try self.constant(inst),
+        .ld_global => try self.ldGlobal(inst),
+        .st_global => try self.stGlobal(inst),
         .itof,
         .ftoi,
         .neg,
@@ -169,6 +171,7 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
         .le,
         .ge,
         => try self.binaryOp(inst),
+        .call => try self.call(inst),
         .jmp => try self.jmp(inst, current_block, next_block),
         .br => try self.br(inst, current_block, next_block),
         .ret => try self.ret(inst),
@@ -286,42 +289,83 @@ fn elideInst(self: *Assembler, inst: Ir.Index) bool {
 
 fn constant(self: *Assembler, inst: Ir.Index) !void {
     const ip = self.ir.instPayload(inst).ip;
-    const tv = self.pool.get(ip).tv;
-
-    const wide = switch (tv.ty) {
-        .int => tv.val.int > std.math.maxInt(u32),
-        .float => true,
-        else => false,
-    };
-    if (wide) {
-        var imm: [8]u8 = undefined;
-        switch (tv.ty) {
-            .int => @memcpy(&imm, asBytes(&tv.val.int)),
-            .float => @memcpy(&imm, asBytes(&tv.val.float)),
-            else => unreachable,
-        }
-        const dst = try self.allocate();
-        try self.register_map.put(self.arena, inst, dst);
-        try self.add(.ldw, .{
-            .dst = dst,
-            .ops = .{ .wimm = imm },
-        });
-    } else {
-        var imm: [4]u8 = undefined;
-        const val: u32 = switch (tv.ty) {
-            .nonetype => undefined,
-            .bool => @intFromBool(tv.val.bool),
-            .int => @intCast(tv.val.int),
-            else => unreachable,
-        };
-        @memcpy(&imm, asBytes(&val));
-        const dst = try self.allocate();
-        try self.register_map.put(self.arena, inst, dst);
-        try self.add(.ld, .{
-            .dst = dst,
-            .ops = .{ .imm = imm },
-        });
+    switch (self.pool.get(ip)) {
+        .tv => |tv| {
+            const wide = switch (tv.ty) {
+                .int => tv.val.int > std.math.maxInt(u32),
+                .float => true,
+                else => false,
+            };
+            if (wide) {
+                var imm: [8]u8 = undefined;
+                switch (tv.ty) {
+                    .int => @memcpy(&imm, asBytes(&tv.val.int)),
+                    .float => @memcpy(&imm, asBytes(&tv.val.float)),
+                    else => unreachable,
+                }
+                const dst = try self.allocate();
+                try self.register_map.put(self.arena, inst, dst);
+                try self.add(.ldw, .{
+                    .dst = dst,
+                    .ops = .{ .wimm = imm },
+                });
+            } else {
+                var imm: [4]u8 = undefined;
+                const val: u32 = switch (tv.ty) {
+                    .nonetype => undefined,
+                    .bool => @intFromBool(tv.val.bool),
+                    .int => @intCast(tv.val.int),
+                    else => unreachable,
+                };
+                @memcpy(&imm, asBytes(&val));
+                const dst = try self.allocate();
+                try self.register_map.put(self.arena, inst, dst);
+                try self.add(.ld, .{
+                    .dst = dst,
+                    .ops = .{ .imm = imm },
+                });
+            }
+        },
+        .function => |index| {
+            const function_ptr = self.pool.functionPtr(index);
+            var imm: [8]u8 = undefined;
+            @memcpy(&imm, asBytes(&function_ptr));
+            const dst = try self.allocate();
+            try self.register_map.put(self.arena, inst, dst);
+            try self.add(.ldw, .{
+                .dst = dst,
+                .ops = .{ .wimm = imm },
+            });
+        },
+        else => unreachable,
     }
+}
+
+fn ldGlobal(self: *Assembler, inst: Ir.Index) !void {
+    const ip = self.ir.instPayload(inst).ip;
+    const dst = try self.allocate();
+    try self.add(.ld_global, .{ .dst = dst, .ops = .{ .ip = ip } });
+}
+
+fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
+    const payload = self.ir.instPayload(inst).unary_ip;
+    const ip = payload.ip;
+
+    const val = self.register_map.get(payload.op).?;
+    if (self.rangeEnd(payload.op) == inst) self.deallocate(val);
+
+    try self.add(.st_global, .{
+        .dst = undefined,
+        .ops = .{ .store = .{ .ip = ip, .val = val } },
+    });
+}
+
+fn call(self: *Assembler, inst: Ir.Index) !void {
+    _ = self;
+    _ = inst;
+    // const ip = self.ir.instPayload(inst).ip;
+    // const dst = try self.allocate();
+    // try self.add(.ld_global, .{ .dst = dst, .ops = .{ .ip = ip } });
 }
 
 fn binaryOp(self: *Assembler, inst: Ir.Index) !void {

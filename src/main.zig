@@ -10,8 +10,12 @@ const render = @import("render.zig");
 const Interpreter = @import("rt/Interpreter.zig");
 const Bytecode = @import("bc/Bytecode.zig");
 
+const posix = std.posix;
 const Node = Ast.Node;
+const GlobalMap = Interpreter.GlobalMap;
+const asBytes = std.mem.asBytes;
 const max_file_size = std.math.maxInt(u32);
+const stack_size = 8 * 1024 * 1024;
 
 pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
     var file = try std.fs.cwd().openFile(input_filename, .{});
@@ -67,39 +71,50 @@ pub fn main() !void {
 
     // post order format guarantees that the module node will be the last
     const module_node: u32 = @intCast(tree.nodes.len - 1);
-    const module_slice = tree.extraData(tree.data(module_node).module.stmts, Node.ExtraSlice);
-    const module_stmts = tree.extraSlice(module_slice);
-    for (module_stmts) |stmt| {
-        if (@as(Node.Tag, tree.data(stmt)) == .function) {
-            const function = tree.data(stmt).function;
+    const ir_data = try IrGen.generate(gpa, &pool, &tree, module_node);
+    const ir_index = try pool.createIr(ir_data);
+    const ir = pool.irPtr(ir_index);
 
-            // ig.lowerFunction(stmt);
-            const ir = try IrGen.generate(gpa, &pool, &tree, function.body);
-            {
-                const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-                // _ = ir_renderer;
-                var renderer = ir_renderer.init(writer, arena.allocator(), &ir);
-                try renderer.render();
-                try buffered_out.flush();
-            }
-
-            try writer.print("{}\n\n", .{ir.insts.len});
-            // _ = ir;
-
-            const bytecode = try Assembler.assemble(gpa, &pool, &ir);
-            {
-                const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-                // _ = bytecode_renderer;
-                var renderer = bytecode_renderer.init(writer, arena.allocator(), &bytecode);
-                try renderer.render();
-                try buffered_out.flush();
-            }
-            try writer.print("{}\n\n", .{bytecode.code.len});
-            try interpret(gpa, &bytecode);
-        }
+    {
+        const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+        // _ = ir_renderer;
+        var renderer = ir_renderer.init(writer, arena.allocator(), ir);
+        try renderer.render();
+        try buffered_out.flush();
     }
+
+    try writer.print("\n", .{});
+
+    const bc_data = try Assembler.assemble(gpa, &pool, ir);
+    const bc_index = try pool.createBytecode(bc_data);
+    const bc = pool.bytecodePtr(bc_index);
+    {
+        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+        // _ = bytecode_renderer;
+        var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
+        try renderer.render();
+        try buffered_out.flush();
+    }
+
+    try interpret(gpa, bc);
 }
 
 pub fn interpret(gpa: Allocator, bytecode: *const Bytecode) !void {
-    try Interpreter.entry(gpa, bytecode);
+    var global_context = GlobalMap.init(gpa);
+    defer global_context.deinit();
+
+    const stack = try posix.mmap(
+        null,
+        stack_size,
+        posix.PROT.READ | posix.PROT.WRITE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
+
+    const sp: [*]u64 = @ptrCast(stack.ptr);
+    @memcpy(asBytes(&sp[0]), asBytes(&&global_context));
+    // @memcpy(asBytes(&sp[0]), asBytes(&&global_context));
+
+    Interpreter.entry(@ptrCast(sp + 1), bytecode);
 }

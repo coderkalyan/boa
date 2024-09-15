@@ -20,15 +20,23 @@ pub fn parent(base: *Scope) ?*Scope {
         .module => null,
         .function => base.cast(Function).?.parent,
         .block => base.cast(Block).?.parent,
-        // .local_type => base.cast(LocalType).?.parent,
     };
+}
+
+pub fn context(base: *Scope) *Scope {
+    var s = base;
+    while (true) {
+        switch (s.tag) {
+            .module, .function => return s,
+            .block => s = s.cast(Block).?.parent,
+        }
+    }
 }
 
 const Tag = enum {
     module,
     function,
     block,
-    // local_type,
 };
 
 pub const Module = struct {
@@ -42,45 +50,11 @@ pub const Function = struct {
     base: Scope = .{ .tag = base_tag },
 
     parent: *Scope,
-    var_table: std.AutoHashMapUnmanaged(InternPool.Index, u32),
-    var_slots: std.MultiArrayList(Slot),
-
-    const Slot = struct {
-        // the type of a slot can be changed (demoted) during the first step
-        // of IrGen analysis, to increasingly generic types as all possible
-        // code paths are analyzed
-        ty: InternPool.Index,
-        // when a variable is first defined, it's liveness is false, and its
-        // type is unknown. when it is definitively assigned to, its liveness
-        // is set to true, and the type is unioned with the value being assigned
-        // when it is undefined and first defined in some cases, the type is
-        // a union of undef and the value type
-        //
-        // that is, a variable currently holds a value if its stack slot is `live`
-        // *and* its current type is not set to undef. for undef-union types, this
-        // check is unfortunately done at runtime, similar to safe optionals - except
-        // that unlike an optional, which is a nonetype-union, variable access of
-        // an undef-union tagged as undef causes a panic (stack trace)
-        // live: bool,
-    };
 
     pub fn init(s: *Scope) Function {
         return .{
             .parent = s,
-            .var_table = .{},
-            .var_slots = .{},
         };
-    }
-
-    pub fn declare(self: *Function, arena: Allocator, ident: InternPool.Index) !u32 {
-        std.debug.assert(!self.var_table.contains(ident));
-
-        const top: u32 = @intCast(self.var_slots.len);
-        try self.var_slots.ensureUnusedCapacity(arena, 1);
-        try self.var_table.ensureUnusedCapacity(arena, 1);
-        self.var_slots.appendAssumeCapacity(.{ .ty = undefined });
-        self.var_table.putAssumeCapacity(ident, top);
-        return top;
     }
 };
 
@@ -219,8 +193,6 @@ pub fn resolveIdent(inner: *Scope, ident: InternPool.Index) ?*Scope {
             .module => break,
             .function => {
                 const function = s.cast(Function).?;
-                // if (function.var_table.contains(ident)) return s;
-
                 s = function.parent;
             },
             .block => {

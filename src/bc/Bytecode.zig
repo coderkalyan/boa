@@ -1,8 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Ir = @import("../ir/Ir.zig");
+const InternPool = @import("../InternPool.zig");
 
-ir: *const Ir,
+register_count: u32,
 code: List.Slice,
 
 pub const List = std.MultiArrayList(Inst);
@@ -18,6 +19,13 @@ pub const Inst = struct {
         // load a wide immediate (64 bit) into register
         // .wimm,
         ldw,
+
+        // load the value of a global variable by identifier
+        // .ip
+        ld_global,
+        // store a value in a global variable by identifier
+        // .unary_ip
+        st_global,
 
         // move from register to register
         // .unary: src register
@@ -98,11 +106,19 @@ pub const Inst = struct {
         // float greater than equal
         fge,
 
+        // function call
+        call,
+        // schedules lazy compilation of a function and then enters it
+        trampoline,
+
         // jump to index if register is true (1)
         branch,
         // unconditionally jump to index
         jump,
         exit,
+
+        // fake instruction, stores intern pool pointer
+        pool,
     };
 
     pub const Payload = struct {
@@ -120,6 +136,12 @@ pub const Inst = struct {
                 target: u32,
             },
             target: u32,
+            ip: InternPool.Index,
+            pool: *InternPool,
+            store: struct {
+                ip: InternPool.Index,
+                val: Register,
+            },
         },
 
         comptime {

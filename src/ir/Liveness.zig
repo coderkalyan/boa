@@ -9,6 +9,10 @@ special: std.AutoHashMapUnmanaged(Ir.Index, ExtraIndex),
 extra: []const u32,
 
 pub const ExtraIndex = enum(u32) { _ };
+pub const ExtraSlice = struct {
+    start: ExtraIndex,
+    end: ExtraIndex,
+};
 
 pub const IfElse = struct {
     dead_start: ExtraIndex,
@@ -36,6 +40,12 @@ pub fn extraData(liveness: *const Liveness, comptime T: type, index: ExtraIndex)
         }
     }
     return result;
+}
+
+pub fn extraSlice(liveness: *const Liveness, slice: ExtraSlice) []const u32 {
+    const start: u32 = @intFromEnum(slice.start);
+    const end: u32 = @intFromEnum(slice.end);
+    return liveness.extra[start..end];
 }
 
 const Analysis = struct {
@@ -94,6 +104,32 @@ const Analysis = struct {
         };
     }
 
+    pub fn addExtra(analysis: *Analysis, extra: anytype) !ExtraIndex {
+        const len: u32 = @intCast(analysis.extra.items.len);
+        const fields = std.meta.fields(@TypeOf(extra));
+        try analysis.extra.ensureUnusedCapacity(analysis.gpa, fields.len);
+        inline for (fields) |field| {
+            switch (field.type) {
+                inline else => {
+                    const num = @intFromEnum(@field(extra, field.name));
+                    analysis.extra.appendAssumeCapacity(num);
+                },
+            }
+        }
+        return @enumFromInt(len);
+    }
+
+    pub fn addSlice(analysis: *Analysis, slice: []const u32) !ExtraIndex {
+        const start: u32 = @intCast(analysis.extra.items.len);
+        try analysis.extra.appendSlice(analysis.gpa, slice);
+        const end: u32 = @intCast(analysis.extra.items.len);
+
+        return analysis.addExtra(ExtraSlice{
+            .start = @enumFromInt(start),
+            .end = @enumFromInt(end),
+        });
+    }
+
     inline fn seenBefore(analysis: *const Analysis, inst: Ir.Index) bool {
         return analysis.live_set.contains(inst); // or analysis.live_out.contains(inst);
     }
@@ -118,21 +154,6 @@ const Analysis = struct {
         } else {
             return @truncate(elem >> 4);
         }
-    }
-
-    fn addExtra(analysis: *Analysis, extra: anytype) Allocator.Error!ExtraIndex {
-        const fields = std.meta.fields(@TypeOf(extra));
-        try analysis.extra.ensureUnusedCapacity(analysis.gpa, fields.len);
-        const len: u32 = @intCast(analysis.extra.items.len);
-        inline for (fields) |field| {
-            switch (field.type) {
-                inline else => {
-                    const num: u32 = @intFromEnum(@field(extra, field.name));
-                    analysis.extra.appendAssumeCapacity(@bitCast(num));
-                },
-            }
-        }
-        return @enumFromInt(len);
     }
 
     fn compareLiveSets(a: *const LiveSet, b: *const LiveSet) bool {
@@ -241,6 +262,8 @@ const Analysis = struct {
         const tag = ir.instTag(inst);
         switch (tag) {
             .constant => try analysis.constant(live_out, inst),
+            .ld_global => try analysis.ldGlobal(live_out, inst),
+            .st_global => try analysis.stGlobal(live_out, inst),
             .itof,
             .ftoi,
             .neg,
@@ -265,6 +288,7 @@ const Analysis = struct {
             .le,
             .ge,
             => try analysis.binaryOp(live_out, inst),
+            .call => try analysis.call(live_out, inst),
             .phi => try analysis.phi(live_out, inst),
             .jmp => {},
             .br => try analysis.br(live_out, inst),
@@ -275,6 +299,24 @@ const Analysis = struct {
     fn constant(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
         var bits: u4 = 0;
         if (!live_out.remove(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+    }
+
+    fn ldGlobal(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        var bits: u4 = 0;
+        if (!live_out.remove(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+    }
+
+    fn stGlobal(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        const payload = analysis.ir.instPayload(inst);
+        var bits: u4 = 0;
+
+        if (!live_out.contains(payload.unary_ip.op)) {
+            bits |= 0x1;
+            try live_out.put(analysis.arena, payload.unary_ip.op, {});
+        }
+
         analysis.setBits(inst, bits);
     }
 
@@ -306,6 +348,37 @@ const Analysis = struct {
         if (!live_out.contains(inst)) bits |= 0x8;
 
         analysis.setBits(inst, bits);
+    }
+
+    fn call(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        const ir = analysis.ir;
+        const payload = ir.instPayload(inst).unary_extra;
+        const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+        const args: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+        var bits: u4 = 0;
+
+        if (!live_out.contains(payload.op)) {
+            bits |= 0x1;
+            try live_out.put(analysis.arena, payload.op, {});
+        }
+
+        const scratch_top = analysis.scratch.items.len;
+        defer analysis.scratch.shrinkRetainingCapacity(scratch_top);
+        try analysis.scratch.ensureUnusedCapacity(analysis.arena, args.len);
+        try live_out.ensureUnusedCapacity(analysis.arena, @intCast(args.len));
+        for (args) |arg| {
+            if (!live_out.contains(arg)) {
+                analysis.scratch.appendAssumeCapacity(@intFromBool(true));
+                live_out.putAssumeCapacity(arg, {});
+            } else {
+                analysis.scratch.appendAssumeCapacity(@intFromBool(false));
+            }
+        }
+
+        if (!live_out.contains(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+        const extra = try analysis.addSlice(analysis.scratch.items[scratch_top..]);
+        try analysis.special.put(analysis.gpa, inst, extra);
     }
 
     fn phi(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {

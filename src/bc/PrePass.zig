@@ -1,5 +1,6 @@
 const std = @import("std");
 const Ir = @import("../ir/Ir.zig");
+const Liveness = @import("../ir/Liveness.zig");
 
 const Allocator = std.mem.Allocator;
 const BlockIndex = Ir.BlockIndex;
@@ -82,7 +83,13 @@ const Context = struct {
         const dead_bits = ir.liveness.deadBits(inst);
 
         switch (tag) {
-            .constant => if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst),
+            .constant,
+            .ld_global,
+            => if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst),
+            .st_global => {
+                if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.unary_ip.op, inst);
+                if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst);
+            },
             .itof,
             .ftoi,
             .neg,
@@ -92,6 +99,20 @@ const Context = struct {
             => {
                 if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.unary, inst);
                 if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst);
+            },
+            .call => {
+                if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.unary_extra.op, inst);
+                if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst);
+
+                const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.unary_extra.extra);
+                const args = ir.extraSlice(slice);
+
+                const special = ir.liveness.special.get(inst).?;
+                const dead_slice = ir.liveness.extraData(Liveness.ExtraSlice, special);
+                const dead_args = ir.liveness.extraSlice(dead_slice);
+                for (args, dead_args) |arg, dead_arg| {
+                    if (dead_arg == 1) self.markRangeEnd(@enumFromInt(arg), inst);
+                }
             },
             .add,
             .sub,

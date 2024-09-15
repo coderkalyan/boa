@@ -30,6 +30,13 @@ pub const Inst = struct {
         // .ip
         constant,
 
+        // load the value of a global variable by identifier
+        // .ip
+        ld_global,
+        // store a value in a global variable by identifier
+        // .unary_ip
+        st_global,
+
         // int to float
         // .unary
         itof,
@@ -85,6 +92,9 @@ pub const Inst = struct {
         // greater than equal
         ge,
 
+        // function call
+        call,
+
         // return a value
         ret,
         // jump unconditionally to a new block
@@ -109,6 +119,10 @@ pub const Inst = struct {
         },
         block: BlockIndex,
         extra: ExtraIndex,
+        unary_ip: struct {
+            op: Index,
+            ip: InternPool.Index,
+        },
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -126,6 +140,7 @@ pub const Inst = struct {
             unary_extra,
             block,
             extra,
+            unary_ip,
         };
     };
 
@@ -173,6 +188,8 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
 
     return switch (tag) {
         .constant => ir.pool.get(payload.ip).tv.ty,
+        .st_global => ir.typeOf(payload.unary_ip.op),
+        .ld_global => .any,
         .itof => .float,
         .ftoi => .int,
         .binv => .int,
@@ -187,6 +204,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .neg => ir.typeOf(payload.unary),
         .bor, .band, .bxor, .sll, .sra => .int,
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
+        .call => .any, // TODO: we can do better
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
         .phi => ir.extraData(Inst.Phi, payload.extra).ty,
@@ -195,7 +213,8 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
 
 pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
     return switch (tag) {
-        .constant => .ip,
+        .constant, .ld_global => .ip,
+        .st_global => .unary_ip,
         .itof,
         .ftoi,
         .neg,
@@ -221,6 +240,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .ge,
         .phi,
         => .binary,
+        .call => .unary_extra,
         .ret => .unary,
         .jmp => .block,
         .br => .unary_extra,
@@ -233,7 +253,7 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
     const payload = ir.insts.items(.payload)[index];
 
     switch (tag) {
-        .constant => return &.{},
+        .constant, .ld_global => return &.{},
         .itof,
         .ftoi,
         .neg,
@@ -242,6 +262,10 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
         .ret,
         => {
             ops[0] = payload.unary;
+            return ops[0..1];
+        },
+        .st_global => {
+            ops[0] = payload.unary_ip.op;
             return ops[0..1];
         },
         .add,
@@ -265,6 +289,11 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
             ops[0] = payload.binary.l;
             ops[1] = payload.binary.r;
             return ops[0..2];
+        },
+        .call => {
+            const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.unary_extra.extra);
+            const args: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+            return args;
         },
         .phi => {
             const phi = ir.extraData(Ir.Inst.Phi, payload.extra);

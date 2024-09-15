@@ -5,6 +5,7 @@ const InternPool = @import("../InternPool.zig");
 
 const BlockBuilder = @This();
 const Index = Ir.Index;
+const ExtraIndex = Ir.ExtraIndex;
 const BlockIndex = Ir.BlockIndex;
 
 ig: *IrGen,
@@ -108,4 +109,31 @@ pub fn phi(
         .block2 = block2,
     });
     return bb.add(.{ .tag = .phi, .payload = .{ .extra = extra_ptr } });
+}
+
+pub fn ldGlobal(bb: *BlockBuilder, ident: InternPool.Index) !Index {
+    return bb.add(.{ .tag = .ld_global, .payload = .{ .ip = ident } });
+}
+
+pub fn stGlobal(bb: *BlockBuilder, val: Index, ident: InternPool.Index) !Index {
+    return bb.add(.{
+        .tag = .st_global,
+        .payload = .{
+            .unary_ip = .{
+                .op = val,
+                .ip = ident,
+            },
+        },
+    });
+}
+
+pub fn call(bb: *BlockBuilder, ptr: Index, args: []const Index) !Index {
+    const slice = try bb.ig.addSlice(@ptrCast(args));
+    const extra = try bb.ig.addExtra(slice);
+    return bb.add(.{
+        .tag = .call,
+        .payload = .{
+            .unary_extra = .{ .op = ptr, .extra = extra },
+        },
+    });
 }

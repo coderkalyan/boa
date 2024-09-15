@@ -307,6 +307,23 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     });
                     try self.stream.newline();
                 },
+                .call => {
+                    const ptr = @intFromEnum(payload.unary_extra.op);
+                    const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.unary_extra.extra);
+                    const args = ir.extraSlice(slice);
+                    var dead = if (dead_bits & 0x1 != 0) "!" else "";
+                    try writer.print("call({s}%{}", .{ dead, ptr });
+
+                    const special = ir.liveness.special.get(inst).?;
+                    const dead_slice = ir.liveness.extraData(Liveness.ExtraSlice, special);
+                    const dead_args = ir.liveness.extraSlice(dead_slice);
+                    for (args, dead_args) |arg, dead_arg| {
+                        dead = if (dead_arg == 1) "!" else "";
+                        try writer.print(", {s}%{}", .{ dead, arg });
+                    }
+                    try writer.print(")", .{});
+                    try self.stream.newline();
+                },
                 inline else => {
                     try writer.print("{s}(", .{@tagName(tag)});
 
@@ -327,6 +344,10 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                         .ip => try ir.pool.print(writer, payload.ip),
                         .block => try writer.print("block{}", .{@intFromEnum(payload.block)}),
                         .extra, .unary_extra => unreachable,
+                        .unary_ip => {
+                            try ir.pool.print(writer, payload.unary_ip.ip);
+                            try writer.print(", %{}", .{@intFromEnum(payload.unary_ip.op)});
+                        },
                     }
                     try writer.print(")", .{});
                     try self.stream.newline();
@@ -339,14 +360,21 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
 pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type {
     return struct {
         stream: IndentingWriter(width, WriterType),
+        pool: *const InternPool,
         bc: *const Bytecode,
         arena: Allocator,
 
         pub const Self = @This();
 
-        pub fn init(writer: anytype, arena: Allocator, bc: *const Bytecode) Self {
+        pub fn init(
+            writer: anytype,
+            arena: Allocator,
+            pool: *const InternPool,
+            bc: *const Bytecode,
+        ) Self {
             return .{
                 .stream = indentingWriter(width, writer),
+                .pool = pool,
                 .arena = arena,
                 .bc = bc,
             };
@@ -363,6 +391,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
             const writer = self.stream.writer();
 
             const tag = code.items(.tag)[i];
+            if (tag == .pool) return;
             const payload = code.items(.payload)[i];
             const dst: u32 = @intFromEnum(payload.dst);
 
@@ -407,6 +436,14 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try writer.print("{} ({})\n", .{ target, offset });
                 },
                 .exit => try writer.print("\n", .{}),
+                .ld_global => {
+                    try self.pool.print(writer, payload.ops.ip);
+                    try writer.print("\n", .{});
+                },
+                .st_global => {
+                    try self.pool.print(writer, payload.ops.store.ip);
+                    try writer.print(", %{}\n", .{@intFromEnum(payload.ops.store.val)});
+                },
                 else => {
                     const op1: u32 = @intFromEnum(payload.ops.binary.op1);
                     const op2: u32 = @intFromEnum(payload.ops.binary.op2);

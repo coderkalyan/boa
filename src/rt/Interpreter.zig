@@ -1,14 +1,17 @@
 const std = @import("std");
 const Bytecode = @import("../bc/Bytecode.zig");
+const InternPool = @import("../InternPool.zig");
 
 const Allocator = std.mem.Allocator;
 const Tag = Bytecode.Inst.Tag;
 const Payload = Bytecode.Inst.Payload;
 const asBytes = std.mem.asBytes;
+pub const GlobalMap = std.AutoHashMap(InternPool.Index, i64);
 
 const Slot = extern union {
     int: i64,
     float: f64,
+    ptr: *anyopaque,
 };
 
 const Handler = *const fn (
@@ -20,6 +23,8 @@ const Handler = *const fn (
 const jump_table: [std.meta.tags(Tag).len]Handler = .{
     ld, // ld
     ldw, // ldw
+    ldGlobal, // ld_global
+    stGlobal, // st_global
     mov, // mov
     itof, // itof
     ftoi, // ftoi
@@ -54,19 +59,23 @@ const jump_table: [std.meta.tags(Tag).len]Handler = .{
     fle, // fle
     ige, // ige
     fge, // fge
+    trap, // call
+    trap, // trampoline
     branch, // branch
     jump, // jump
-    trap, // exit
+    exit, // exit
+    trap, // pool
 };
 
-pub fn entry(gpa: Allocator, bc: *const Bytecode) !void {
-    const stack = try gpa.alloc(Slot, 2000);
-    @memset(stack, .{ .int = 0 });
-    defer gpa.free(stack);
-
+// pub fn trampoline(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, sp: [*]Slot) void {
+// const tags = bc.code.items(.tag).ptr;
+// const payloads = bc.code.items(.payload).ptr;
+// entryInner(1, tags, payloads, stack);
+// }
+pub fn entry(stack: [*]Slot, bc: *const Bytecode) void {
     const tags = bc.code.items(.tag).ptr;
     const payloads = bc.code.items(.payload).ptr;
-    entryInner(0, tags, payloads, stack.ptr);
+    entryInner(1, tags, payloads, stack);
 }
 
 fn entryInner(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
@@ -101,6 +110,22 @@ fn ldw(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot
     const dst = payloads[pc].dst;
     const imm: i64 = @bitCast(payloads[pc].ops.wimm);
     stack[@intFromEnum(dst)].int = imm;
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn ldGlobal(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const dst = payloads[pc].dst;
+    const ip = payloads[pc].ops.ip;
+    const global_context: *GlobalMap = @alignCast(@ptrCast((stack - @as(isize, 1))[0].ptr));
+    stack[@intFromEnum(dst)].int = global_context.get(ip).?;
+    next(pc + 1, tags, payloads, stack);
+}
+
+fn stGlobal(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    const ip = payloads[pc].ops.store.ip;
+    const val = payloads[pc].ops.store.val;
+    const global_context: *GlobalMap = @alignCast(@ptrCast((stack - @as(isize, 1))[0].ptr));
+    global_context.put(ip, stack[@intFromEnum(val)].int) catch unreachable;
     next(pc + 1, tags, payloads, stack);
 }
 
@@ -381,6 +406,26 @@ fn branch(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]S
 fn jump(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
     const target: u32 = payloads[pc].ops.target;
     next(target, tags, payloads, stack);
+}
+
+// fn call(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+//     const ir_data = try IrGen.generate(gpa, &pool, &tree, module_node);
+//     const ir_index = try pool.createIr(ir_data);
+//     const ir = pool.irPtr(ir_index);
+//     next(target, tags, payloads, stack);
+// }
+
+fn exit(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    _ = pc;
+    _ = tags;
+    _ = payloads;
+    _ = stack;
+
+    std.debug.print("interpreter exit\n", .{});
+    // std.debug.print("stack: ", .{});
+    // for (0..4) |i| std.debug.print("r{} = {}\n", .{ i, stack[i].int });
+    // std.debug.print("\n", .{});
+    // while (true) {}
 }
 
 fn trap(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {

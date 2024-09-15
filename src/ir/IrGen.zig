@@ -117,7 +117,7 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
 
     var module: Scope.Module = .{};
     ig.current_builder = try ig.createBlock();
-    try ig.block(&module.base, node);
+    try ig.moduleInner(&module.base, node);
     _ = try ig.current_builder.seal();
 
     var ir: Ir = .{
@@ -135,6 +135,16 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
     return ir;
 }
 
+fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+    const data = ig.tree.data(node).module;
+    const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
+    const stmts = ig.tree.extraSlice(sl);
+
+    for (stmts) |stmt| {
+        try ig.statement(scope, stmt);
+    }
+}
+
 fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
     var inner = Scope.Block.init(ig, scope);
     try ig.blockInner(&inner.base, node);
@@ -142,7 +152,7 @@ fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
 
 fn blockInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
     const data = ig.tree.data(node).block;
-    const sl = ig.tree.extraData(data.stmts, Node.ExtraSlice);
+    const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
     const stmts = ig.tree.extraSlice(sl);
 
     for (stmts) |stmt| {
@@ -158,7 +168,7 @@ fn blockLocals(
 ) !void {
     _ = scope;
     const data = ig.tree.data(node).block;
-    const sl = ig.tree.extraData(data.stmts, Node.ExtraSlice);
+    const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
     const stmts = ig.tree.extraSlice(sl);
 
     for (stmts) |stmt| {
@@ -186,6 +196,8 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !void {
         .return_none => try ig.returnNone(scope, node),
         .return_val => try ig.returnVal(scope, node),
         .pass => {},
+        .function => try ig.function(scope, node),
+        .call => try ig.call(scope, node),
         else => ig.unexpectedNode(node),
     };
 }
@@ -197,9 +209,22 @@ fn assignSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const id = try ig.pool.put(.{ .str = ident_str });
 
     const val = try ig.valExpr(scope, assign.val);
-    const b = scope.cast(Scope.Block).?;
-    try b.vars.put(ig.arena, id, val);
-    return val;
+    // how we treat the assignment depends on the context we're in -
+    // module or function scope
+    const context = scope.context();
+    switch (context.tag) {
+        // global variables are implemented using a runtime hashtable lookup
+        // (which will eventually be wrapped by an inline cache)
+        .module => return ig.current_builder.stGlobal(val, id),
+        // local variables are zero cost, we just map the identifier
+        // to the expression value
+        .function => {
+            const b = scope.cast(Scope.Block).?;
+            try b.vars.put(ig.arena, id, val);
+            return val;
+        },
+        .block => unreachable,
+    }
 }
 
 fn unionLocals(
@@ -246,7 +271,7 @@ fn ifSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const b = scope.cast(Scope.Block).?;
     const if_else = ig.tree.data(node).if_else;
-    const exec = ig.tree.extraData(if_else.exec, Node.IfElse);
+    const exec = ig.tree.extraData(Node.IfElse, if_else.exec);
 
     // we need at least three other blocks - for if, else, and exit
     const if_builder = try ig.createBlock();
@@ -378,7 +403,7 @@ fn desugarRangeIterable(ig: *IrGen, iterable: Node.Index) !?RangeIterable {
 
     // at this point we know we have a range, just figure out how many
     // explicit args it has an fill in the implicit ones (start = 0, step = 1)
-    const args_slice = ig.tree.extraData(call_data.args, Node.ExtraSlice);
+    const args_slice = ig.tree.extraData(Node.ExtraSlice, call_data.args);
     const args = ig.tree.extraSlice(args_slice);
     return switch (args.len) {
         1 => .{ .start = null, .stop = args[0], .step = null },
@@ -391,7 +416,7 @@ fn desugarRangeIterable(ig: *IrGen, iterable: Node.Index) !?RangeIterable {
 fn forLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const b = scope.cast(Scope.Block).?;
     const for_loop = ig.tree.data(node).for_loop;
-    const signature = ig.tree.extraData(for_loop.signature, Node.ForSignature);
+    const signature = ig.tree.extraData(Node.ForSignature, for_loop.signature);
     const target_token = ig.tree.mainToken(signature.target);
     const target = try ig.pool.put(.{ .str = ig.tree.tokenString(target_token) });
 
@@ -634,12 +659,21 @@ fn floatLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 }
 
 fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
+    _ = ri;
     const ident_token = ig.tree.mainToken(node);
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
 
-    switch (ri.semantics) {
-        .val => {
+    // how we treat the assignment depends on the context we're in -
+    // module or function scope
+    const context = scope.context();
+    switch (context.tag) {
+        // global variables are implemented using a runtime hashtable lookup
+        // (which will eventually be wrapped by an inline cache)
+        .module => return ig.current_builder.ldGlobal(id),
+        // local variables are zero cost, we just map the identifier
+        // to the expression value
+        .function => {
             const ident_scope = scope.resolveIdent(id) orelse {
                 std.debug.print("unknown identifier: {s}\n", .{ident_str});
                 unreachable;
@@ -650,10 +684,7 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
             const ident_block = ident_scope.cast(Scope.Block).?;
             return ident_block.vars.get(id).?;
         },
-        // since we're returning a variable to store to, if the identifer
-        // doesn't exist we create (alloc) it
-        // also, if the variable changed types, dealloc and realloc it
-        .ptr => unreachable, // TODO: potentially used for globals
+        .block => unreachable,
     }
 }
 
@@ -784,7 +815,8 @@ fn binaryFloatDecay(ig: *IrGen, l: *Ir.Index, r: *Ir.Index) !void {
         },
         // nop for now, may need to revisit
         .bool => {},
-        else => unreachable,
+        // same here
+        else => {},
     }
 }
 
@@ -799,6 +831,55 @@ fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
     const return_val = ig.tree.data(node).return_val;
     const operand = try ig.valExpr(scope, return_val);
     return ig.current_builder.unary(.ret, operand);
+}
+
+fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const def_token = ig.tree.mainToken(node);
+    const ident_token: Ast.TokenIndex = @enumFromInt(@intFromEnum(def_token) + 1);
+    const ident_str = ig.tree.tokenString(ident_token);
+    const id = try ig.pool.put(.{ .str = ident_str });
+
+    const findex = try ig.pool.createFunction(.{
+        .tree = ig.tree,
+        .node = node,
+        .lazy_ir = null,
+        .lazy_bytecode = null,
+    });
+    const ip = try ig.pool.put(.{ .function = findex });
+
+    const val = try ig.current_builder.constant(ip);
+    const context = scope.context();
+    switch (context.tag) {
+        // global variables are implemented using a runtime hashtable lookup
+        // (which will eventually be wrapped by an inline cache)
+        .module => return ig.current_builder.stGlobal(val, id),
+        // local variables are zero cost, we just map the identifier
+        // to the expression value
+        .function => {
+            const b = scope.cast(Scope.Block).?;
+            try b.vars.put(ig.arena, id, val);
+            return val;
+        },
+        .block => unreachable,
+    }
+}
+
+fn call(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const call_data = ig.tree.data(node).call;
+    const slice = ig.tree.extraData(Node.ExtraSlice, call_data.args);
+    const ast_args: []const Node.Index = @ptrCast(ig.tree.extraSlice(slice));
+
+    const ptr = try ig.valExpr(scope, call_data.ptr);
+    const scratch_top = ig.scratch.items.len;
+    defer ig.scratch.shrinkRetainingCapacity(scratch_top);
+    try ig.scratch.ensureUnusedCapacity(ig.arena, ast_args.len);
+    for (ast_args) |ast_arg| {
+        const arg = try ig.valExpr(scope, ast_arg);
+        ig.scratch.appendAssumeCapacity(@intFromEnum(arg));
+    }
+
+    const args = ig.scratch.items[scratch_top..];
+    return ig.current_builder.call(ptr, @ptrCast(args));
 }
 
 pub fn getTempIr(ig: *const IrGen) Ir {

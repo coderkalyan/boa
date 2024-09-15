@@ -329,12 +329,13 @@ pub const Node = struct {
     };
 };
 
-pub fn extraData(self: *const Ast, index: usize, comptime T: type) T {
+pub fn extraData(self: *const Ast, comptime T: type, index: Node.ExtraIndex) T {
     const fields = std.meta.fields(T);
+    const base = index;
     var result: T = undefined;
     inline for (fields, 0..) |field, i| {
         comptime std.debug.assert(field.type == Node.Index);
-        @field(result, field.name) = self.extra_data[index + i];
+        @field(result, field.name) = self.extra_data[base + i];
     }
     return result;
 }
