@@ -148,6 +148,8 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
         .arg => try self.argInst(inst),
         .itof,
         .ftoi,
+        .itob,
+        .btoi,
         .neg,
         .binv,
         .lnot,
@@ -410,7 +412,9 @@ fn constant(self: *Assembler, inst: Ir.Index) !void {
                 else => false,
             };
             if (wide) {
-                unreachable;
+                const dst = try self.allocate();
+                try self.register_map.put(self.arena, inst, dst);
+                try self.addLdi(dst, ip);
             } else {
                 const imm: Immediate = switch (tv.ty) {
                     .nonetype => .{ .none = {} },
@@ -544,6 +548,11 @@ fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
         .lnot => .lnot,
         .itof => .itof,
         .ftoi => .ftoi,
+        .itob, .btoi => {
+            const operand = self.register_map.get(unary).?;
+            try self.register_map.put(self.arena, inst, operand);
+            return;
+        },
         else => unreachable,
     };
 

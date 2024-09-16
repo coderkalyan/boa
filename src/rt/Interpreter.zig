@@ -99,7 +99,13 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 
     switch (pool.get(ip)) {
         .ty, .ir, .bytecode => unreachable,
-        .tv => unreachable, // TODO: implement
+        .tv => |tv| switch (pool.get(tv.ty).ty) {
+            .nonetype => stack[fp + dst].int = undefined,
+            .int => stack[fp + dst].int = @bitCast(tv.val.int), // TODO: should this be unsigned?
+            .float => stack[fp + dst].float = tv.val.float,
+            .bool => stack[fp + dst].int = @intFromBool(tv.val.bool),
+            .@"union", .any => unreachable,
+        },
         .str => unreachable, // TODO: implement
         .function => |fi| stack[fp + dst].ptr = pool.functionPtr(fi),
     }

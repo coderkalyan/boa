@@ -85,6 +85,8 @@ pub const Node = struct {
         float_literal,
         // main_token = literal string (true or false)
         bool_literal,
+        // main_token = k_none
+        none_literal,
         // main_token = literal string
         // char_literal,
         string_literal,

@@ -267,6 +267,8 @@ const Analysis = struct {
             .arg => try analysis.argInst(live_out, inst),
             .itof,
             .ftoi,
+            .itob,
+            .btoi,
             .neg,
             .binv,
             .lnot,

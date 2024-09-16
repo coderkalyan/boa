@@ -45,6 +45,12 @@ pub const Inst = struct {
         // float to int
         // .unary
         ftoi,
+        // int to bool
+        // .unary
+        itob,
+        // bool to int
+        // .unary
+        btoi,
 
         // negation (unary subtraction)
         // .unary
@@ -197,6 +203,8 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .arg => .int, // TODO: fix this
         .itof => .float,
         .ftoi => .int,
+        .itob => .bool,
+        .btoi => .int,
         .binv => .int,
         .lnot => .bool,
         .add,
@@ -222,6 +230,8 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .st_global => .unary_ip,
         .itof,
         .ftoi,
+        .itob,
+        .btoi,
         .neg,
         .binv,
         .lnot,
@@ -262,6 +272,8 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
         .constant, .ld_global, .arg => return &.{},
         .itof,
         .ftoi,
+        .itob,
+        .btoi,
         .neg,
         .binv,
         .lnot,

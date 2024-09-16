@@ -156,7 +156,7 @@ pub fn generate(
     return ir;
 }
 
-fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!void {
     const data = ig.tree.data(node).module;
     const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
     const stmts = ig.tree.extraSlice(sl);
@@ -166,7 +166,7 @@ fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!v
     }
 }
 
-fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!void {
     var inner = Scope.Block.init(ig, scope);
     const data = ig.tree.data(node).function;
     const signature = ig.tree.extraData(Node.FunctionSignature, data.signature);
@@ -183,12 +183,12 @@ fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}
     try ig.block(&inner.base, data.body);
 }
 
-fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!void {
     var inner = Scope.Block.init(ig, scope);
     try ig.blockInner(&inner.base, node);
 }
 
-fn blockInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+fn blockInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!void {
     const data = ig.tree.data(node).block;
     const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
     const stmts = ig.tree.extraSlice(sl);
@@ -591,6 +591,7 @@ inline fn ptrExpr(b: *Scope.Block, s: *Scope, node: Node.Index) !Ir.Index {
 fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
     return switch (ri.semantics) {
         .val => switch (ig.tree.data(node)) {
+            .none_literal => ig.noneLiteral(scope, node),
             .bool_literal => ig.boolLiteral(scope, node),
             .integer_literal => ig.integerLiteral(scope, node),
             .float_literal => ig.floatLiteral(scope, node),
@@ -604,6 +605,12 @@ fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
             else => ig.unexpectedNode(node),
         },
     };
+}
+
+fn noneLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    _ = scope;
+    _ = node;
+    return ig.current_builder.constant(.none);
 }
 
 fn boolLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
@@ -726,7 +733,7 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
     }
 }
 
-fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const op_token = ig.tree.mainToken(node);
     const binary = ig.tree.data(node).binary;
     const token_tag = ig.tree.tokenTag(op_token);
@@ -734,44 +741,103 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir
     if (token_tag == .k_or) return ig.logicalOr(scope, node);
     if (token_tag == .k_and) return ig.logicalAnd(scope, node);
 
-    var l = try ig.valExpr(scope, binary.left);
-    var r = try ig.valExpr(scope, binary.right);
-    if (token_tag == .slash) {
-        if (ig.typeOf(l) == .int) l = try ig.current_builder.unary(.itof, l);
-        if (ig.typeOf(r) == .int) r = try ig.current_builder.unary(.itof, r);
-    } else {
-        try ig.binaryFloatDecay(&l, &r);
-    }
-
-    const lty = ig.typeOf(l);
-    const rty = ig.typeOf(r);
-    std.debug.assert(lty == rty);
-
-    const tag: Ir.Inst.Tag = switch (token_tag) {
-        .plus => .add,
-        .minus => .sub,
-        .asterisk => .mul,
-        .slash, .slash_slash => .div,
-        .percent => .mod,
-        .asterisk_asterisk => .pow,
-        .equal_equal => .eq,
-        .bang_equal => .ne,
-        .l_angle => .lt,
-        .r_angle => .gt,
-        .l_angle_equal => .le,
-        .r_angle_equal => .ge,
-        .ampersand => .band,
-        .pipe => .bor,
-        .caret => .bxor,
-        .l_angle_l_angle => .sll,
-        .r_angle_r_angle => .sra,
+    const l = try ig.valExpr(scope, binary.left);
+    const r = try ig.valExpr(scope, binary.right);
+    switch (token_tag) {
+        .plus => return ig.binaryAdd(l, r),
         else => unreachable,
-    };
-
-    return ig.current_builder.binary(tag, l, r);
+    }
+    // if (token_tag == .slash) {
+    //     if (ig.typeOf(l) == .int) l = try ig.current_builder.unary(.itof, l);
+    //     if (ig.typeOf(r) == .int) r = try ig.current_builder.unary(.itof, r);
+    // } else {
+    //     try ig.binaryFloatDecay(&l, &r);
+    // }
+    //
+    // const lty = ig.typeOf(l);
+    // const rty = ig.typeOf(r);
+    // std.debug.assert(lty == rty);
+    //
+    // const tag: Ir.Inst.Tag = switch (token_tag) {
+    //     .plus => .add,
+    //     .minus => .sub,
+    //     .asterisk => .mul,
+    //     .slash, .slash_slash => .div,
+    //     .percent => .mod,
+    //     .asterisk_asterisk => .pow,
+    //     .equal_equal => .eq,
+    //     .bang_equal => .ne,
+    //     .l_angle => .lt,
+    //     .r_angle => .gt,
+    //     .l_angle_equal => .le,
+    //     .r_angle_equal => .ge,
+    //     .ampersand => .band,
+    //     .pipe => .bor,
+    //     .caret => .bxor,
+    //     .l_angle_l_angle => .sll,
+    //     .r_angle_r_angle => .sra,
+    //     else => unreachable,
+    // };
+    //
+    // return ig.current_builder.binary(tag, l, r);
 }
 
-fn logicalOr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+fn binaryNumericDecay(ig: *IrGen, l: Ir.Index, r: Ir.Index) !Ir.Index {
+    const pool = ig.pool;
+    const lty = ig.typeOf(l);
+    const rty = ig.typeOf(r);
+    switch (pool.get(lty).ty) {
+        .nonetype => return error.Unsupported,
+        .int => switch (pool.get(rty).ty) {
+            .nonetype => return error.Unsupported,
+            .int => return ig.current_builder.binary(.add, l, r),
+            .float => {
+                const itof = try ig.current_builder.unary(.itof, l);
+                return ig.current_builder.binary(.add, itof, r);
+            },
+            .bool => {
+                const btoi = try ig.current_builder.unary(.btoi, r);
+                return ig.current_builder.binary(.add, l, btoi);
+            },
+            .@"union", .any => unreachable, // TODO: implement
+        },
+        .float => switch (pool.get(rty).ty) {
+            .nonetype => return error.Unsupported,
+            .int => {
+                const itof = try ig.current_builder.unary(.itof, r);
+                return ig.current_builder.binary(.add, l, itof);
+            },
+            .float => return ig.current_builder.binary(.add, l, r),
+            .bool => {
+                const btoi = try ig.current_builder.unary(.btoi, r);
+                const itof = try ig.current_builder.unary(.itof, btoi);
+                return ig.current_builder.binary(.add, l, itof);
+            },
+            .@"union", .any => unreachable, // TODO: implement
+        },
+        .bool => switch (pool.get(rty).ty) {
+            .nonetype => return error.Unsupported,
+            .int => {
+                const btoi = try ig.current_builder.unary(.btoi, l);
+                return ig.current_builder.binary(.add, btoi, r);
+            },
+            .float => {
+                const btoi = try ig.current_builder.unary(.btoi, l);
+                const itof = try ig.current_builder.unary(.itof, btoi);
+                return ig.current_builder.binary(.add, itof, r);
+            },
+            .bool => {
+                const lbtoi = try ig.current_builder.unary(.btoi, l);
+                const rbtoi = try ig.current_builder.unary(.btoi, r);
+                return ig.current_builder.binary(.add, lbtoi, rbtoi);
+            },
+            .@"union", .any => unreachable, // TODO: implement
+        },
+        .@"union", .any => unreachable, // TODO: implement
+    }
+}
+
+fn logicalOr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const binary = ig.tree.data(node).binary;
 
     // always evaluate left, if its true, don't bother with right
@@ -793,7 +859,7 @@ fn logicalOr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.
     return phi;
 }
 
-fn logicalAnd(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+fn logicalAnd(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const binary = ig.tree.data(node).binary;
 
     // always evaluate left, if its false, don't bother with right
@@ -816,7 +882,7 @@ fn logicalAnd(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir
     return phi;
 }
 
-fn unaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+fn unaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const op_token = ig.tree.mainToken(node);
     const unary = ig.tree.data(node).unary;
 
@@ -858,14 +924,14 @@ fn binaryFloatDecay(ig: *IrGen, l: *Ir.Index, r: *Ir.Index) !void {
     }
 }
 
-fn returnNone(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+fn returnNone(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     _ = scope;
     _ = node;
     const operand = try ig.current_builder.constant(.none);
     return ig.current_builder.unary(.ret, operand);
 }
 
-fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!Ir.Index {
+fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const return_val = ig.tree.data(node).return_val;
     const operand = try ig.valExpr(scope, return_val);
     return ig.current_builder.unary(.ret, operand);

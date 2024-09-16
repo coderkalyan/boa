@@ -343,6 +343,10 @@ const Parser = struct {
                 .main_token = p.eatCurrent(),
                 .data = .{ .bool_literal = {} },
             }),
+            .k_none => p.addNode(.{
+                .main_token = p.eatCurrent(),
+                .data = .{ .none_literal = {} },
+            }),
             .str_lit => p.addNode(.{
                 .main_token = p.eatCurrent(),
                 .data = .{ .string_literal = {} },
