@@ -132,6 +132,7 @@ pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !vo
             .{ .ip = fi_ip },
             .{ .opcode = .call },
             .{ .register = 0 },
+            .{ .register = 0 },
             .{ .count = 0 },
             .{ .opcode = .exit },
         },

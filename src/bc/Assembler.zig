@@ -469,16 +469,18 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
 
     const target = self.register_map.get(ptr).?;
     if (self.rangeEnd(ptr) == inst) self.deallocate(target);
+    const dst = try self.allocate();
+    try self.register_map.put(self.arena, inst, dst);
 
     try self.code.ensureUnusedCapacity(self.gpa, 3 + args.len);
     self.code.appendSliceAssumeCapacity(&.{
         .{ .opcode = .call },
         .{ .register = target },
+        .{ .register = dst },
         .{ .count = @intCast(args.len) },
     });
     for (args) |ir_arg| {
         const arg = self.register_map.get(@enumFromInt(ir_arg)).?;
-        std.debug.print("arg: x{}\n", .{arg});
         if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
         self.code.appendAssumeCapacity(.{ .register = arg });
     }

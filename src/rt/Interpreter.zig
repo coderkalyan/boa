@@ -131,8 +131,7 @@ fn stGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) vo
 fn arg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst = code[pc + 1].register;
     const i = code[pc + 2].count;
-    stack[fp + dst].int = stack[fp - 4 - i - 1].int;
-    std.debug.print("receiving arg{}: {}\n", .{ i, fp - 4 - i - 1 });
+    stack[fp + dst].int = stack[fp - 5 - i - 1].int;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -220,22 +219,21 @@ fn jump(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 
 fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
     const target = code[pc + 1].target;
-    const count = code[pc + 2].count;
+    const dst = code[pc + 2].register;
+    const count = code[pc + 3].count;
     const fi: *FunctionInfo = @ptrCast(@alignCast(stack[rfp + target].ptr));
     const pool: *InternPool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-    var i = count;
-    while (i > 0) {
-        i -= 1;
-        const reg = code[pc + 3 + count - i - 1].register;
-        std.debug.print("pushing x{} ({} to {}\n", .{ reg, stack[reg].int, rsp + i });
-        stack[rsp + i].int = stack[reg].int;
+    for (0..count) |i| {
+        const reg = code[pc + 4 + i].register;
+        stack[rsp + count - 1 - i].int = stack[rfp + reg].int;
     }
 
-    stack[rsp + count + 0].int = @bitCast(pc + 3 + count);
+    stack[rsp + count + 0].int = @bitCast(pc + 4 + count);
     stack[rsp + count + 1].int = @bitCast(rfp);
     stack[rsp + count + 2].ptr = @constCast(code);
-    stack[rsp + count + 3].ptr = stack[rfp - 1].ptr;
+    stack[rsp + count + 3].int = dst;
+    stack[rsp + count + 4].ptr = stack[rfp - 1].ptr;
 
     if (fi.lazy_ir == null) {
         const ir_data = IrGen.generate(.function, pool.gpa, pool, fi.tree, fi.node) catch unreachable;
@@ -263,20 +261,21 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
 
-    const fp = rsp + count + 4;
+    const fp = rsp + count + 5;
     const sp = fp + bc.register_count;
     next(2, bc.code.ptr, fp, sp, stack);
 }
 
 fn ret(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    _ = pc;
-    _ = code;
+    const src = code[pc + 1].register;
     // _ = sp;
 
-    const rsp = fp - 4;
-    const rfp: u64 = @bitCast(stack[rsp + 1].int);
+    const rsp = fp - 5;
     const rpc: usize = @bitCast(stack[rsp + 0].int);
+    const rfp: u64 = @bitCast(stack[rsp + 1].int);
     const rcode: [*]const Word = @ptrCast(@alignCast(stack[rsp + 2].ptr));
+    const dst: u64 = @bitCast(stack[rsp + 3].int);
+    stack[rfp + dst].int = stack[fp + src].int;
 
     std.debug.print("interpreter ret\n", .{});
     std.debug.print("stack:\n", .{});
