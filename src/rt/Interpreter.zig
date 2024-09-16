@@ -210,7 +210,7 @@ fn branch(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
         const target = code[pc + 2].target;
         next(target, code, fp, sp, stack);
     }
-    next(pc + 2, code, fp, sp, stack);
+    next(pc + 3, code, fp, sp, stack);
 }
 
 fn jump(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
@@ -240,19 +240,26 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     if (fi.lazy_ir == null) {
         const ir_data = IrGen.generate(.function, pool.gpa, pool, fi.tree, fi.node) catch unreachable;
         fi.lazy_ir = pool.createIr(ir_data) catch unreachable;
+        // const ir = pool.irPtr(fi.lazy_ir.?);
+        // {
+        //     const ir_renderer = render.IrRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+        //     // _ = ir_renderer;
+        //     var renderer = ir_renderer.init(std.io.getStdOut().writer(), pool.gpa, ir);
+        //     renderer.render() catch unreachable;
+        // }
     }
     const ir = pool.irPtr(fi.lazy_ir.?);
     if (fi.lazy_bytecode == null) {
         const bc_data = Assembler.assemble(pool.gpa, pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
-        const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-        {
-            std.debug.print("bytecode listing for function:\n", .{});
-            const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-            // _ = bytecode_renderer;
-            var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-            renderer.render() catch unreachable;
-        }
+        // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+        // {
+        //     std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
+        //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+        //     // _ = bytecode_renderer;
+        //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+        //     renderer.render() catch unreachable;
+        // }
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
 

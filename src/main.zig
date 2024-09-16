@@ -75,26 +75,26 @@ pub fn main() !void {
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);
 
-    {
-        const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-        // _ = ir_renderer;
-        var renderer = ir_renderer.init(writer, arena.allocator(), ir);
-        try renderer.render();
-        try buffered_out.flush();
-    }
+    // {
+    //     const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+    //     // _ = ir_renderer;
+    //     var renderer = ir_renderer.init(writer, arena.allocator(), ir);
+    //     try renderer.render();
+    //     try buffered_out.flush();
+    // }
 
     try writer.print("\n", .{});
 
     const bc_data = try Assembler.assemble(gpa, &pool, ir);
     const bc_index = try pool.createBytecode(bc_data);
-    const bc = pool.bytecodePtr(bc_index);
-    {
-        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-        // _ = bytecode_renderer;
-        var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
-        try renderer.render();
-        try buffered_out.flush();
-    }
+    // const bc = pool.bytecodePtr(bc_index);
+    // {
+    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+    //     // _ = bytecode_renderer;
+    //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
+    //     try renderer.render();
+    //     try buffered_out.flush();
+    // }
 
     const findex = try pool.createFunction(.{
         .tree = &tree,

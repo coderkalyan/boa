@@ -816,6 +816,20 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, U
         .r_angle_r_angle => .sra,
         else => unreachable,
     };
+
+    // bitwise operators don't work on floats
+    if (ig.typeOf(l) == .float) {
+        switch (token_tag) {
+            .ampersand,
+            .pipe,
+            .caret,
+            .l_angle_l_angle,
+            .r_angle_r_angle,
+            => return error.Unsupported,
+            else => {},
+        }
+    }
+
     return ig.current_builder.binary(tag, l, r);
 }
 
@@ -878,32 +892,6 @@ fn unaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Un
     };
 
     return ig.current_builder.unary(tag, operand);
-}
-
-fn binaryFloatDecay(ig: *IrGen, l: *Ir.Index, r: *Ir.Index) !void {
-    const lty = ig.typeOf(l.*);
-    const rty = ig.typeOf(r.*);
-
-    switch (lty) {
-        .int => switch (rty) {
-            // nop
-            .int => {},
-            // decay left to float
-            .float => l.* = try ig.current_builder.unary(.itof, l.*),
-            else => unreachable,
-        },
-        .float => switch (rty) {
-            // decay right to float
-            .int => r.* = try ig.current_builder.unary(.itof, r.*),
-            // nop
-            .float => {},
-            else => unreachable,
-        },
-        // nop for now, may need to revisit
-        .bool => {},
-        // same here
-        else => {},
-    }
 }
 
 fn returnNone(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
