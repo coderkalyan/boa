@@ -738,103 +738,85 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, U
     const binary = ig.tree.data(node).binary;
     const token_tag = ig.tree.tokenTag(op_token);
 
+    // special evaluation order (short circuiting)
     if (token_tag == .k_or) return ig.logicalOr(scope, node);
     if (token_tag == .k_and) return ig.logicalAnd(scope, node);
 
-    const l = try ig.valExpr(scope, binary.left);
-    const r = try ig.valExpr(scope, binary.right);
-    switch (token_tag) {
-        .plus => return ig.binaryAdd(l, r),
-        else => unreachable,
-    }
-    // if (token_tag == .slash) {
-    //     if (ig.typeOf(l) == .int) l = try ig.current_builder.unary(.itof, l);
-    //     if (ig.typeOf(r) == .int) r = try ig.current_builder.unary(.itof, r);
-    // } else {
-    //     try ig.binaryFloatDecay(&l, &r);
-    // }
-    //
-    // const lty = ig.typeOf(l);
-    // const rty = ig.typeOf(r);
-    // std.debug.assert(lty == rty);
-    //
-    // const tag: Ir.Inst.Tag = switch (token_tag) {
-    //     .plus => .add,
-    //     .minus => .sub,
-    //     .asterisk => .mul,
-    //     .slash, .slash_slash => .div,
-    //     .percent => .mod,
-    //     .asterisk_asterisk => .pow,
-    //     .equal_equal => .eq,
-    //     .bang_equal => .ne,
-    //     .l_angle => .lt,
-    //     .r_angle => .gt,
-    //     .l_angle_equal => .le,
-    //     .r_angle_equal => .ge,
-    //     .ampersand => .band,
-    //     .pipe => .bor,
-    //     .caret => .bxor,
-    //     .l_angle_l_angle => .sll,
-    //     .r_angle_r_angle => .sra,
-    //     else => unreachable,
-    // };
-    //
-    // return ig.current_builder.binary(tag, l, r);
-}
-
-fn binaryNumericDecay(ig: *IrGen, l: Ir.Index, r: Ir.Index) !Ir.Index {
-    const pool = ig.pool;
+    var l = try ig.valExpr(scope, binary.left);
+    var r = try ig.valExpr(scope, binary.right);
     const lty = ig.typeOf(l);
     const rty = ig.typeOf(r);
-    switch (pool.get(lty).ty) {
-        .nonetype => return error.Unsupported,
-        .int => switch (pool.get(rty).ty) {
-            .nonetype => return error.Unsupported,
-            .int => return ig.current_builder.binary(.add, l, r),
-            .float => {
-                const itof = try ig.current_builder.unary(.itof, l);
-                return ig.current_builder.binary(.add, itof, r);
-            },
+
+    // special type handling - coerce one of the types to a float, the other
+    // will follow suit below
+    if (token_tag == .slash) {
+        switch (lty) {
+            .int => l = try ig.current_builder.unary(.itof, l),
             .bool => {
-                const btoi = try ig.current_builder.unary(.btoi, r);
-                return ig.current_builder.binary(.add, l, btoi);
+                l = try ig.current_builder.unary(.btoi, l);
+                l = try ig.current_builder.unary(.itof, l);
             },
-            .@"union", .any => unreachable, // TODO: implement
-        },
-        .float => switch (pool.get(rty).ty) {
-            .nonetype => return error.Unsupported,
-            .int => {
-                const itof = try ig.current_builder.unary(.itof, r);
-                return ig.current_builder.binary(.add, l, itof);
-            },
-            .float => return ig.current_builder.binary(.add, l, r),
-            .bool => {
-                const btoi = try ig.current_builder.unary(.btoi, r);
-                const itof = try ig.current_builder.unary(.itof, btoi);
-                return ig.current_builder.binary(.add, l, itof);
-            },
-            .@"union", .any => unreachable, // TODO: implement
-        },
-        .bool => switch (pool.get(rty).ty) {
-            .nonetype => return error.Unsupported,
-            .int => {
-                const btoi = try ig.current_builder.unary(.btoi, l);
-                return ig.current_builder.binary(.add, btoi, r);
-            },
-            .float => {
-                const btoi = try ig.current_builder.unary(.btoi, l);
-                const itof = try ig.current_builder.unary(.itof, btoi);
-                return ig.current_builder.binary(.add, itof, r);
-            },
-            .bool => {
-                const lbtoi = try ig.current_builder.unary(.btoi, l);
-                const rbtoi = try ig.current_builder.unary(.btoi, r);
-                return ig.current_builder.binary(.add, lbtoi, rbtoi);
-            },
-            .@"union", .any => unreachable, // TODO: implement
-        },
-        .@"union", .any => unreachable, // TODO: implement
+            else => {},
+        }
     }
+
+    // type coercion
+    switch (lty) {
+        .nonetype => return error.Unsupported,
+        .int => switch (rty) {
+            .nonetype => return error.Unsupported,
+            .int => {},
+            .float => l = try ig.current_builder.unary(.itof, l),
+            .bool => r = try ig.current_builder.unary(.btoi, r),
+            else => unreachable, // TODO: implement
+        },
+        .float => switch (rty) {
+            .nonetype => return error.Unsupported,
+            .int => r = try ig.current_builder.unary(.itof, r),
+            .float => {},
+            .bool => {
+                r = try ig.current_builder.unary(.btoi, r);
+                r = try ig.current_builder.unary(.itof, r);
+            },
+            else => unreachable, // TODO: implement
+        },
+        .bool => switch (rty) {
+            .nonetype => return error.Unsupported,
+            .int => l = try ig.current_builder.unary(.btoi, l),
+            .float => {
+                l = try ig.current_builder.unary(.btoi, l);
+                l = try ig.current_builder.unary(.itof, l);
+            },
+            .bool => {
+                l = try ig.current_builder.unary(.btoi, l);
+                r = try ig.current_builder.unary(.btoi, r);
+            },
+            else => unreachable, // TODO: implement
+        },
+        else => unreachable, // TODO: implement
+    }
+
+    const tag: Ir.Inst.Tag = switch (token_tag) {
+        .plus => .add,
+        .minus => .sub,
+        .asterisk => .mul,
+        .slash, .slash_slash => .div,
+        .percent => .mod,
+        .asterisk_asterisk => .pow,
+        .equal_equal => .eq,
+        .bang_equal => .ne,
+        .l_angle => .lt,
+        .r_angle => .gt,
+        .l_angle_equal => .le,
+        .r_angle_equal => .ge,
+        .ampersand => .band,
+        .pipe => .bor,
+        .caret => .bxor,
+        .l_angle_l_angle => .sll,
+        .r_angle_r_angle => .sra,
+        else => unreachable,
+    };
+    return ig.current_builder.binary(tag, l, r);
 }
 
 fn logicalOr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
