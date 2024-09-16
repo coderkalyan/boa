@@ -167,8 +167,20 @@ fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!v
 }
 
 fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+    var inner = Scope.Block.init(ig, scope);
     const data = ig.tree.data(node).function;
-    try ig.block(scope, data.body);
+    const signature = ig.tree.extraData(Node.FunctionSignature, data.signature);
+    const slice = ig.tree.extraData(Node.ExtraSlice, signature.params);
+    const params = ig.tree.extraSlice(slice);
+    for (params, 0..) |param, i| {
+        const param_token = ig.tree.mainToken(param);
+        const param_str = ig.tree.tokenString(param_token);
+        const id = try ig.pool.put(.{ .str = param_str });
+        const arg = try ig.current_builder.arg(@intCast(i));
+        try inner.vars.put(ig.arena, id, arg);
+    }
+
+    try ig.block(&inner.base, data.body);
 }
 
 fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {

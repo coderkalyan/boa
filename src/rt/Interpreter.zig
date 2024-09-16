@@ -20,7 +20,7 @@ pub const Slot = extern union {
 };
 
 const Handler = *const fn (
-    in_pc: u64,
+    in_pc: usize,
     code: [*]const Word,
     fp: u64,
     sp: u64,
@@ -32,6 +32,7 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     ldGlobal, // ld_global
     stGlobal, // st_global
     unary(.mov), // mov
+    arg, // arg
     unary(.itof), // itof
     unary(.ftoi), // ftoi
     unary(.ineg), // ineg
@@ -73,34 +74,25 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     exit, // exit
 };
 
-// pub fn trampoline(pc: u64, tags: [*]const Tag, payloads: [*]const Payload, sp: [*]Slot) void {
-// const tags = bc.code.items(.tag).ptr;
-// const payloads = bc.code.items(.payload).ptr;
-// entryInner(1, tags, payloads, stack);
-// }
-// pub fn entry(pc: u64, stack: [*]Slot, bc: *const Bytecode) void {
-//     entryInner(pc, bc.code.ptr, 3, 3, stack);
-// }
-
-pub fn entry(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+pub fn entry(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     next(pc, code, fp, sp, stack);
 }
 
-inline fn next(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+inline fn next(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const opcode = code[pc].opcode;
     const handler = jump_table[@intFromEnum(opcode)];
     @call(.always_tail, handler, .{ pc, code, fp, sp, stack });
 }
 
-fn ld(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const dst = @intFromEnum(code[pc + 1].register);
+fn ld(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
     const imm = code[pc + 2].imm;
     stack[fp + dst].int = imm;
     next(pc + 3, code, fp, sp, stack);
 }
 
-fn ldi(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const dst = @intFromEnum(code[pc + 1].register);
+fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
@@ -114,29 +106,37 @@ fn ldi(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     next(pc + 3, code, fp, sp, stack);
 }
 
-fn ldGlobal(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const dst = @intFromEnum(code[pc + 1].register);
+fn ldGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
     stack[fp + dst].int = context.get(ip).?;
     next(pc + 3, code, fp, sp, stack);
 }
 
-fn stGlobal(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const src = @intFromEnum(code[pc + 1].register);
+fn stGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const src = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
     context.put(ip, stack[fp + src].int) catch unreachable;
     next(pc + 3, code, fp, sp, stack);
 }
 
+fn arg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
+    const i = code[pc + 2].count;
+    stack[fp + dst].int = stack[fp - 4 - i - 1].int;
+    std.debug.print("receiving arg{}: {}\n", .{ i, fp - 4 - i - 1 });
+    next(pc + 3, code, fp, sp, stack);
+}
+
 inline fn unary(comptime opcode: Opcode) Handler {
     return struct {
-        pub fn unary(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-            const dst: u32 = @intFromEnum(code[pc + 1].register);
-            const src: u32 = @intFromEnum(code[pc + 2].register);
+        pub fn unary(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+            const dst = code[pc + 1].register;
+            const src = code[pc + 2].register;
 
-            const op = stack[src];
+            const op = stack[fp + src];
             stack[fp + dst] = switch (opcode) {
                 .mov => op,
                 .itof => .{ .float = @floatFromInt(op.int) },
@@ -155,10 +155,10 @@ inline fn unary(comptime opcode: Opcode) Handler {
 
 inline fn binary(comptime opcode: Opcode) Handler {
     return struct {
-        pub fn binary(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-            const dst: u32 = @intFromEnum(code[pc + 1].register);
-            const src1: u32 = @intFromEnum(code[pc + 2].register);
-            const src2: u32 = @intFromEnum(code[pc + 3].register);
+        pub fn binary(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+            const dst = code[pc + 1].register;
+            const src1 = code[pc + 2].register;
+            const src2 = code[pc + 3].register;
 
             const op1 = stack[fp + src1];
             const op2 = stack[fp + src2];
@@ -198,8 +198,8 @@ inline fn binary(comptime opcode: Opcode) Handler {
     }.binary;
 }
 
-fn branch(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const condition = @intFromEnum(code[pc + 1].register);
+fn branch(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const condition = code[pc + 1].register;
     if (stack[fp + condition].int == 1) {
         const target = code[pc + 2].target;
         next(target, code, fp, sp, stack);
@@ -207,20 +207,29 @@ fn branch(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     next(pc + 2, code, fp, sp, stack);
 }
 
-fn jump(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+fn jump(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const target = code[pc + 1].target;
     next(target, code, fp, sp, stack);
 }
 
-fn call(pc: u64, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
+fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
     const target = code[pc + 1].target;
+    const count = code[pc + 2].count;
     const fi: *FunctionInfo = @ptrCast(@alignCast(stack[rfp + target].ptr));
     const pool: *InternPool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-    stack[rsp + 0].int = @bitCast(pc + 2);
-    stack[rsp + 1].int = @bitCast(rfp);
-    stack[rsp + 2].ptr = @constCast(code);
-    stack[rsp + 3].ptr = stack[rfp - 1].ptr;
+    var i = count;
+    while (i > 0) {
+        i -= 1;
+        const reg = code[pc + 3 + count - i - 1].register;
+        std.debug.print("pushing x{} ({} to {}\n", .{ reg, stack[reg].int, rsp + i });
+        stack[rsp + i].int = stack[reg].int;
+    }
+
+    stack[rsp + count + 0].int = @bitCast(pc + 3 + count);
+    stack[rsp + count + 1].int = @bitCast(rfp);
+    stack[rsp + count + 2].ptr = @constCast(code);
+    stack[rsp + count + 3].ptr = stack[rfp - 1].ptr;
 
     if (fi.lazy_ir == null) {
         const ir_data = IrGen.generate(.function, pool.gpa, pool, fi.tree, fi.node) catch unreachable;
@@ -230,37 +239,40 @@ fn call(pc: u64, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
     if (fi.lazy_bytecode == null) {
         const bc_data = Assembler.assemble(pool.gpa, pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
+        const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+        {
+            std.debug.print("bytecode listing for function:\n", .{});
+            const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+            // _ = bytecode_renderer;
+            var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+            renderer.render() catch unreachable;
+        }
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-    // {
-    //     std.debug.print("bytecode listing for function:\n", .{});
-    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-    //     // _ = bytecode_renderer;
-    //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-    //     renderer.render() catch unreachable;
-    // }
 
-    const fp = rsp + 4;
+    const fp = rsp + count + 4;
     const sp = fp + bc.register_count;
-    std.debug.print("calling\n", .{});
     next(2, bc.code.ptr, fp, sp, stack);
 }
 
-fn ret(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+fn ret(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     _ = pc;
     _ = code;
-    _ = sp;
+    // _ = sp;
 
     const rsp = fp - 4;
     const rfp: u64 = @bitCast(stack[rsp + 1].int);
-    const rpc: u64 = @bitCast(stack[rsp + 0].int);
+    const rpc: usize = @bitCast(stack[rsp + 0].int);
     const rcode: [*]const Word = @ptrCast(@alignCast(stack[rsp + 2].ptr));
 
     std.debug.print("interpreter ret\n", .{});
+    std.debug.print("stack:\n", .{});
+    for (fp..sp) |i| std.debug.print("x{} = {}\n", .{ i - fp, stack[i].int });
+    std.debug.print("\n", .{});
     next(rpc, rcode, rfp, rsp, stack);
 }
 
-fn exit(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+fn exit(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     _ = pc;
     _ = code;
     _ = fp;
@@ -274,7 +286,7 @@ fn exit(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     // while (true) {}
 }
 
-fn trap(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+fn trap(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     _ = sp;
     _ = fp;
     // _ = stack;

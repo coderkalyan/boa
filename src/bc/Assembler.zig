@@ -78,7 +78,7 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
     }
 
     return .{
-        .register_count = assembler.register_count,
+        .register_count = @intCast(assembler.register_count),
         .code = try assembler.code.toOwnedSlice(assembler.gpa),
     };
 }
@@ -145,6 +145,7 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
         .constant => try self.constant(inst),
         .ld_global => try self.ldGlobal(inst),
         .st_global => try self.stGlobal(inst),
+        .arg => try self.argInst(inst),
         .itof,
         .ftoi,
         .neg,
@@ -219,7 +220,7 @@ fn allocate(self: *Assembler) !Register {
     }
 
     // no free register found, so "spill" by increasing our stack frame size
-    const register: Register = @enumFromInt(self.register_count);
+    const register: Register = @intCast(self.register_count);
     self.register_count += 1;
     try self.free_registers.ensureTotalCapacity(self.arena, self.register_count);
     return register;
@@ -314,6 +315,14 @@ fn addStGlobal(self: *Assembler, src: Register, ip: InternPool.Index) !void {
         .{ .opcode = .st_global },
         .{ .register = src },
         .{ .ip = ip },
+    });
+}
+
+fn addArg(self: *Assembler, dst: Register, arg: u32) !void {
+    try self.code.appendSlice(self.gpa, &.{
+        .{ .opcode = .arg },
+        .{ .register = dst },
+        .{ .count = arg },
     });
 }
 
@@ -440,6 +449,13 @@ fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
     try self.addStGlobal(val, ip);
 }
 
+fn argInst(self: *Assembler, inst: Ir.Index) !void {
+    const arg = self.ir.instPayload(inst).arg;
+    const dst = try self.allocate();
+    try self.register_map.put(self.arena, inst, dst);
+    try self.addArg(dst, arg);
+}
+
 fn call(self: *Assembler, inst: Ir.Index) !void {
     const ir = self.ir;
     const payload = self.ir.instPayload(inst).unary_extra;
@@ -450,13 +466,15 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     const target = self.register_map.get(ptr).?;
     if (self.rangeEnd(ptr) == inst) self.deallocate(target);
 
-    try self.code.ensureUnusedCapacity(self.gpa, 2 + args.len);
+    try self.code.ensureUnusedCapacity(self.gpa, 3 + args.len);
     self.code.appendSliceAssumeCapacity(&.{
         .{ .opcode = .call },
         .{ .register = target },
+        .{ .count = @intCast(args.len) },
     });
     for (args) |ir_arg| {
         const arg = self.register_map.get(@enumFromInt(ir_arg)).?;
+        std.debug.print("arg: x{}\n", .{arg});
         if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
         self.code.appendAssumeCapacity(.{ .register = arg });
     }

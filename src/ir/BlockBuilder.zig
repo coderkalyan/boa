@@ -60,6 +60,10 @@ pub fn constant(bb: *BlockBuilder, ip: InternPool.Index) !Index {
     return bb.add(.{ .tag = .constant, .payload = .{ .ip = ip } });
 }
 
+pub fn arg(bb: *BlockBuilder, i: u32) !Index {
+    return bb.add(.{ .tag = .arg, .payload = .{ .arg = i } });
+}
+
 pub fn unary(bb: *BlockBuilder, tag: Ir.Inst.Tag, operand: Index) !Index {
     return bb.add(.{ .tag = tag, .payload = .{ .unary = operand } });
 }

@@ -85,6 +85,7 @@ const Context = struct {
         switch (tag) {
             .constant,
             .ld_global,
+            .arg,
             => if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst),
             .st_global => {
                 if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.unary_ip.op, inst);

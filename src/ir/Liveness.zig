@@ -264,6 +264,7 @@ const Analysis = struct {
             .constant => try analysis.constant(live_out, inst),
             .ld_global => try analysis.ldGlobal(live_out, inst),
             .st_global => try analysis.stGlobal(live_out, inst),
+            .arg => try analysis.argInst(live_out, inst),
             .itof,
             .ftoi,
             .neg,
@@ -317,6 +318,12 @@ const Analysis = struct {
             try live_out.put(analysis.arena, payload.unary_ip.op, {});
         }
 
+        analysis.setBits(inst, bits);
+    }
+
+    fn argInst(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        var bits: u4 = 0;
+        if (!live_out.remove(inst)) bits |= 0x8;
         analysis.setBits(inst, bits);
     }
 

@@ -26,6 +26,8 @@ pub const Opcode = enum(u32) {
     // move from register to register
     // .unary: src register
     mov,
+    // function argument
+    arg,
 
     // type casting
     // .unary: operand
@@ -117,7 +119,7 @@ pub const Opcode = enum(u32) {
     exit,
 };
 
-pub const Register = enum(u32) { _ };
+pub const Register = u32;
 
 pub const Word = extern union {
     opcode: Opcode,
@@ -125,6 +127,7 @@ pub const Word = extern union {
     imm: u32,
     target: u32,
     ip: InternPool.Index,
+    count: u32,
 
     comptime {
         if (builtin.mode != .Debug) {

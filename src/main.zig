@@ -128,10 +128,11 @@ pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !vo
             .{ .imm = @truncate(pool_ptr) },
             .{ .imm = @truncate(pool_ptr >> 32) },
             .{ .opcode = .ldi },
-            .{ .register = @enumFromInt(0) },
+            .{ .register = 0 },
             .{ .ip = fi_ip },
             .{ .opcode = .call },
-            .{ .register = @enumFromInt(0) },
+            .{ .register = 0 },
+            .{ .count = 0 },
             .{ .opcode = .exit },
         },
     };

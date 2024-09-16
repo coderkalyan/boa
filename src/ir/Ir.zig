@@ -36,6 +36,8 @@ pub const Inst = struct {
         // store a value in a global variable by identifier
         // .unary_ip
         st_global,
+        // extract an argument
+        arg,
 
         // int to float
         // .unary
@@ -123,6 +125,7 @@ pub const Inst = struct {
             op: Index,
             ip: InternPool.Index,
         },
+        arg: u32,
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -141,6 +144,7 @@ pub const Inst = struct {
             block,
             extra,
             unary_ip,
+            arg,
         };
     };
 
@@ -190,6 +194,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .constant => ir.pool.get(payload.ip).tv.ty,
         .st_global => ir.typeOf(payload.unary_ip.op),
         .ld_global => .any,
+        .arg => .int, // TODO: fix this
         .itof => .float,
         .ftoi => .int,
         .binv => .int,
@@ -221,6 +226,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .binv,
         .lnot,
         => .unary,
+        .arg => .arg,
         .add,
         .sub,
         .mul,
@@ -253,7 +259,7 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
     const payload = ir.insts.items(.payload)[index];
 
     switch (tag) {
-        .constant, .ld_global => return &.{},
+        .constant, .ld_global, .arg => return &.{},
         .itof,
         .ftoi,
         .neg,

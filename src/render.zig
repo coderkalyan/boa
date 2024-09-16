@@ -348,6 +348,9 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                             try ir.pool.print(writer, payload.unary_ip.ip);
                             try writer.print(", %{}", .{@intFromEnum(payload.unary_ip.op)});
                         },
+                        .arg => {
+                            try writer.print("{}", .{payload.arg});
+                        },
                     }
                     try writer.print(")", .{});
                     try self.stream.newline();
@@ -404,7 +407,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
             try writer.print("{s} ", .{@tagName(opcode)});
             switch (opcode) {
                 .ld => {
-                    const dst = @intFromEnum(self.readWord(&pc).register);
+                    const dst = self.readWord(&pc).register;
                     const imm = self.readWord(&pc).imm;
 
                     const int: u32 = @bitCast(imm);
@@ -412,11 +415,16 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
                 },
                 .ldi => {
-                    const dst = @intFromEnum(self.readWord(&pc).register);
+                    const dst = self.readWord(&pc).register;
                     const ip = self.readWord(&pc).ip;
                     try writer.print("x{}, ", .{dst});
                     try self.pool.print(writer, ip);
                     try writer.print("\n", .{});
+                },
+                .arg => {
+                    const dst = self.readWord(&pc).register;
+                    const arg = self.readWord(&pc).count;
+                    try writer.print("x{}, a{}\n", .{ dst, arg });
                 },
                 .ineg,
                 .fneg,
@@ -426,12 +434,12 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .itof,
                 .ftoi,
                 => {
-                    const dst = @intFromEnum(self.readWord(&pc).register);
-                    const op = @intFromEnum(self.readWord(&pc).register);
+                    const dst = self.readWord(&pc).register;
+                    const op = self.readWord(&pc).register;
                     try writer.print("x{}, x{}\n", .{ dst, op });
                 },
                 .branch => {
-                    const condition = @intFromEnum(self.readWord(&pc).register);
+                    const condition = self.readWord(&pc).register;
                     const target = self.readWord(&pc).target;
                     try writer.print("x{}, {}\n", .{ condition, target });
                 },
@@ -441,7 +449,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 },
                 .exit => try writer.print("\n", .{}),
                 .ld_global, .st_global => {
-                    const dst = @intFromEnum(self.readWord(&pc).register);
+                    const dst = self.readWord(&pc).register;
                     const ip = self.readWord(&pc).ip;
                     try writer.print("x{}, ", .{dst});
                     try self.pool.print(writer, ip);
@@ -475,17 +483,17 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .ige,
                 .fge,
                 => {
-                    const dst = @intFromEnum(self.readWord(&pc).register);
-                    const op1 = @intFromEnum(self.readWord(&pc).register);
-                    const op2 = @intFromEnum(self.readWord(&pc).register);
+                    const dst = self.readWord(&pc).register;
+                    const op1 = self.readWord(&pc).register;
+                    const op2 = self.readWord(&pc).register;
                     try writer.print("x{}, x{}, x{}\n", .{ dst, op1, op2 });
                 },
                 .call => {
-                    const target = @intFromEnum(self.readWord(&pc).register);
+                    const target = self.readWord(&pc).register;
                     try writer.print("x{}, args...\n", .{target});
                 },
                 .ret => {
-                    const val = @intFromEnum(self.readWord(&pc).register);
+                    const val = self.readWord(&pc).register;
                     try writer.print("x{}\n", .{val});
                 },
                 .trampoline => unreachable,
