@@ -78,11 +78,11 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
 // const payloads = bc.code.items(.payload).ptr;
 // entryInner(1, tags, payloads, stack);
 // }
-pub fn entry(stack: [*]Slot, bc: *const Bytecode) void {
-    entryInner(2, bc.code.ptr, 3, 3, stack);
-}
+// pub fn entry(pc: u64, stack: [*]Slot, bc: *const Bytecode) void {
+//     entryInner(pc, bc.code.ptr, 3, 3, stack);
+// }
 
-fn entryInner(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+pub fn entry(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     next(pc, code, fp, sp, stack);
 }
 

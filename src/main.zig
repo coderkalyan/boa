@@ -96,10 +96,18 @@ pub fn main() !void {
         try buffered_out.flush();
     }
 
-    try interpret(gpa, bc);
+    const findex = try pool.createFunction(.{
+        .tree = &tree,
+        .node = module_node,
+        .lazy_ir = ir_index,
+        .lazy_bytecode = bc_index,
+    });
+    const ip = try pool.put(.{ .function = findex });
+
+    try interpret(gpa, &pool, ip);
 }
 
-pub fn interpret(gpa: Allocator, bytecode: *const Bytecode) !void {
+pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !void {
     var context = GlobalMap.init(gpa);
     defer context.deinit();
 
@@ -111,11 +119,23 @@ pub fn interpret(gpa: Allocator, bytecode: *const Bytecode) !void {
         -1,
         0,
     );
-
     const stack: [*]Interpreter.Slot = @ptrCast(stack_memory.ptr);
-    stack[0].int = 0; // caller PC
-    stack[1].int = 0; // caller FP
-    stack[2].ptr = &context;
 
-    Interpreter.entry(stack, bytecode);
+    const pool_ptr: usize = @intFromPtr(pool);
+    const entry_bc: Bytecode = .{
+        .register_count = 0,
+        .code = &.{
+            .{ .imm = @truncate(pool_ptr) },
+            .{ .imm = @truncate(pool_ptr >> 32) },
+            .{ .opcode = .ldi },
+            .{ .register = @enumFromInt(0) },
+            .{ .ip = fi_ip },
+            .{ .opcode = .call },
+            .{ .register = @enumFromInt(0) },
+            .{ .opcode = .exit },
+        },
+    };
+
+    stack[0].ptr = &context;
+    Interpreter.entry(2, entry_bc.code.ptr, 1, 1, stack);
 }
