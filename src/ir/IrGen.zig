@@ -97,7 +97,18 @@ pub fn update(ig: *IrGen, inst: Ir.Index, payload: Ir.Inst.Payload) void {
     ig.insts.items(.payload)[@intFromEnum(inst)] = payload;
 }
 
-pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.Index) !Ir {
+pub const Context = enum {
+    module,
+    function,
+};
+
+pub fn generate(
+    comptime ctx: Context,
+    gpa: Allocator,
+    pool: *InternPool,
+    tree: *const Ast,
+    node: Node.Index,
+) !Ir {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
 
@@ -115,9 +126,19 @@ pub fn generate(gpa: Allocator, pool: *InternPool, tree: *const Ast, node: Node.
         .current_builder = undefined,
     };
 
-    var module: Scope.Module = .{};
     ig.current_builder = try ig.createBlock();
-    try ig.moduleInner(&module.base, node);
+    switch (ctx) {
+        .module => {
+            var module: Scope.Module = .{};
+            try ig.moduleInner(&module.base, node);
+        },
+        .function => {
+            // TODO: functions won't be able to see global scope
+            var module: Scope.Module = .{};
+            var fs = Scope.Function.init(&module.base);
+            try ig.functionInner(&fs.base, node);
+        },
+    }
     _ = try ig.current_builder.seal();
 
     var ir: Ir = .{
@@ -143,6 +164,11 @@ fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!v
     for (stmts) |stmt| {
         try ig.statement(scope, stmt);
     }
+}
+
+fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {
+    const data = ig.tree.data(node).function;
+    try ig.block(scope, data.body);
 }
 
 fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{OutOfMemory}!void {

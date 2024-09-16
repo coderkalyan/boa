@@ -71,7 +71,7 @@ pub fn main() !void {
 
     // post order format guarantees that the module node will be the last
     const module_node: u32 = @intCast(tree.nodes.len - 1);
-    const ir_data = try IrGen.generate(gpa, &pool, &tree, module_node);
+    const ir_data = try IrGen.generate(.module, gpa, &pool, &tree, module_node);
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);
 
@@ -100,10 +100,10 @@ pub fn main() !void {
 }
 
 pub fn interpret(gpa: Allocator, bytecode: *const Bytecode) !void {
-    var global_context = GlobalMap.init(gpa);
-    defer global_context.deinit();
+    var context = GlobalMap.init(gpa);
+    defer context.deinit();
 
-    const stack = try posix.mmap(
+    const stack_memory = try posix.mmap(
         null,
         stack_size,
         posix.PROT.READ | posix.PROT.WRITE,
@@ -112,9 +112,10 @@ pub fn interpret(gpa: Allocator, bytecode: *const Bytecode) !void {
         0,
     );
 
-    const sp: [*]u64 = @ptrCast(stack.ptr);
-    @memcpy(asBytes(&sp[0]), asBytes(&&global_context));
-    // @memcpy(asBytes(&sp[0]), asBytes(&&global_context));
+    const stack: [*]Interpreter.Slot = @ptrCast(stack_memory.ptr);
+    stack[0].int = 0; // caller PC
+    stack[1].int = 0; // caller FP
+    stack[2].ptr = &context;
 
-    Interpreter.entry(@ptrCast(sp + 1), bytecode);
+    Interpreter.entry(stack, bytecode);
 }

@@ -1,424 +1,270 @@
 const std = @import("std");
+const Assembler = @import("../bc/Assembler.zig");
 const Bytecode = @import("../bc/Bytecode.zig");
 const InternPool = @import("../InternPool.zig");
+const IrGen = @import("../ir/IrGen.zig");
+const Ir = @import("../ir/Ir.zig");
+const render = @import("../render.zig");
 
 const Allocator = std.mem.Allocator;
-const Tag = Bytecode.Inst.Tag;
-const Payload = Bytecode.Inst.Payload;
+const Word = Bytecode.Word;
+const Opcode = Bytecode.Opcode;
 const asBytes = std.mem.asBytes;
 pub const GlobalMap = std.AutoHashMap(InternPool.Index, i64);
+const FunctionInfo = InternPool.FunctionInfo;
 
-const Slot = extern union {
+pub const Slot = extern union {
     int: i64,
     float: f64,
     ptr: *anyopaque,
 };
 
 const Handler = *const fn (
-    in_pc: usize,
-    tags: [*]const Tag,
-    payload: [*]const Payload,
+    in_pc: u64,
+    code: [*]const Word,
+    fp: u64,
+    sp: u64,
     stack: [*]Slot,
 ) void;
-const jump_table: [std.meta.tags(Tag).len]Handler = .{
+const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     ld, // ld
-    ldw, // ldw
+    ldi, // ldi
     ldGlobal, // ld_global
     stGlobal, // st_global
-    mov, // mov
-    itof, // itof
-    ftoi, // ftoi
-    ineg, // ineg
-    fneg, // fneg
-    binv, // binv
-    lnot, // lnot
-    iadd, // iadd
-    fadd, // fadd
-    isub, // isub
-    fsub, // fsub
-    imul, // imul
-    fmul, // fmul
-    idiv, // idiv
-    fdiv, // fdiv
-    imod, // imod
-    fmod, // fmod
-    ipow, // ipow
-    fpow, // fpow
-    bor, // bor
-    band, // band
-    bxor, // bxor
-    sll, // sll
-    sra, // sra
-    ieq, // ieq
-    ine, // ine
-    ilt, // ilt
-    flt, // flt
-    igt, // igt
-    fgt, // fgt
-    ile, // ile
-    fle, // fle
-    ige, // ige
-    fge, // fge
-    trap, // call
+    unary(.mov), // mov
+    unary(.itof), // itof
+    unary(.ftoi), // ftoi
+    unary(.ineg), // ineg
+    unary(.fneg), // fneg
+    unary(.binv), // binv
+    unary(.lnot), // lnot
+    binary(.iadd), // iadd
+    binary(.fadd), // fadd
+    binary(.isub), // isub
+    binary(.fsub), // fsub
+    binary(.imul), // imul
+    binary(.fmul), // fmul
+    binary(.idiv), // idiv
+    binary(.fdiv), // fdiv
+    binary(.imod), // imod
+    binary(.fmod), // fmod
+    binary(.ipow), // ipow
+    binary(.fpow), // fpow
+    binary(.bor), // bor
+    binary(.band), // band
+    binary(.bxor), // bxor
+    binary(.sll), // sll
+    binary(.sra), // sra
+    binary(.ieq), // ieq
+    binary(.ine), // ine
+    binary(.ilt), // ilt
+    binary(.flt), // flt
+    binary(.igt), // igt
+    binary(.fgt), // fgt
+    binary(.ile), // ile
+    binary(.fle), // fle
+    binary(.ige), // ige
+    binary(.fge), // fge
+    call, // call
     trap, // trampoline
     branch, // branch
     jump, // jump
+    ret, // ret
     exit, // exit
-    trap, // pool
 };
 
-// pub fn trampoline(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, sp: [*]Slot) void {
+// pub fn trampoline(pc: u64, tags: [*]const Tag, payloads: [*]const Payload, sp: [*]Slot) void {
 // const tags = bc.code.items(.tag).ptr;
 // const payloads = bc.code.items(.payload).ptr;
 // entryInner(1, tags, payloads, stack);
 // }
 pub fn entry(stack: [*]Slot, bc: *const Bytecode) void {
-    const tags = bc.code.items(.tag).ptr;
-    const payloads = bc.code.items(.payload).ptr;
-    entryInner(1, tags, payloads, stack);
+    entryInner(2, bc.code.ptr, 3, 3, stack);
 }
 
-fn entryInner(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    next(pc, tags, payloads, stack);
+fn entryInner(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    next(pc, code, fp, sp, stack);
 }
 
-inline fn next(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    // std.debug.print("stack: ", .{});
-    // for (0..4) |i| std.debug.print("r{} = {}, ", .{ i, stack[i].int });
-    // std.debug.print("\n", .{});
-    const handler = jump_table[@intFromEnum(tags[pc])];
-    @call(.always_tail, handler, .{ pc, tags, payloads, stack });
+inline fn next(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const opcode = code[pc].opcode;
+    const handler = jump_table[@intFromEnum(opcode)];
+    @call(.always_tail, handler, .{ pc, code, fp, sp, stack });
 }
 
-inline fn readOperand(in_pc: usize, code: [*]const u8, op_width: u8) u32 {
-    var operand: u32 = 0;
-    for (0..op_width) |i| {
-        const offset: u5 = @truncate(i);
-        operand |= (@as(u32, code[in_pc + i]) << (offset * 8));
+fn ld(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = @intFromEnum(code[pc + 1].register);
+    const imm = code[pc + 2].imm;
+    stack[fp + dst].int = imm;
+    next(pc + 3, code, fp, sp, stack);
+}
+
+fn ldi(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = @intFromEnum(code[pc + 1].register);
+    const ip = code[pc + 2].ip;
+    var pool: *InternPool = undefined;
+    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+
+    switch (pool.get(ip)) {
+        .ty, .ir, .bytecode => unreachable,
+        .tv => unreachable, // TODO: implement
+        .str => unreachable, // TODO: implement
+        .function => |fi| stack[fp + dst].ptr = pool.functionPtr(fi),
     }
-    return operand;
+    next(pc + 3, code, fp, sp, stack);
 }
 
-fn ld(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst = payloads[pc].dst;
-    const imm: u32 = @bitCast(payloads[pc].ops.imm);
-    stack[@intFromEnum(dst)].int = imm;
-    next(pc + 1, tags, payloads, stack);
+fn ldGlobal(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = @intFromEnum(code[pc + 1].register);
+    const ip = code[pc + 2].ip;
+    const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
+    stack[fp + dst].int = context.get(ip).?;
+    next(pc + 3, code, fp, sp, stack);
 }
 
-fn ldw(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst = payloads[pc].dst;
-    const imm: i64 = @bitCast(payloads[pc].ops.wimm);
-    stack[@intFromEnum(dst)].int = imm;
-    next(pc + 1, tags, payloads, stack);
+fn stGlobal(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const src = @intFromEnum(code[pc + 1].register);
+    const ip = code[pc + 2].ip;
+    const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
+    context.put(ip, stack[fp + src].int) catch unreachable;
+    next(pc + 3, code, fp, sp, stack);
 }
 
-fn ldGlobal(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst = payloads[pc].dst;
-    const ip = payloads[pc].ops.ip;
-    const global_context: *GlobalMap = @alignCast(@ptrCast((stack - @as(isize, 1))[0].ptr));
-    stack[@intFromEnum(dst)].int = global_context.get(ip).?;
-    next(pc + 1, tags, payloads, stack);
+inline fn unary(comptime opcode: Opcode) Handler {
+    return struct {
+        pub fn unary(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+            const dst: u32 = @intFromEnum(code[pc + 1].register);
+            const src: u32 = @intFromEnum(code[pc + 2].register);
+
+            const op = stack[src];
+            stack[fp + dst] = switch (opcode) {
+                .mov => op,
+                .itof => .{ .float = @floatFromInt(op.int) },
+                .ftoi => .{ .int = @intFromFloat(op.float) },
+                .ineg => .{ .int = -op.int },
+                .fneg => .{ .float = -op.float },
+                .binv => .{ .int = ~op.int },
+                .lnot => .{ .int = @intFromBool(op.int == 0) },
+                else => unreachable,
+            };
+
+            next(pc + 3, code, fp, sp, stack);
+        }
+    }.unary;
 }
 
-fn stGlobal(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const ip = payloads[pc].ops.store.ip;
-    const val = payloads[pc].ops.store.val;
-    const global_context: *GlobalMap = @alignCast(@ptrCast((stack - @as(isize, 1))[0].ptr));
-    global_context.put(ip, stack[@intFromEnum(val)].int) catch unreachable;
-    next(pc + 1, tags, payloads, stack);
+inline fn binary(comptime opcode: Opcode) Handler {
+    return struct {
+        pub fn binary(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+            const dst: u32 = @intFromEnum(code[pc + 1].register);
+            const src1: u32 = @intFromEnum(code[pc + 2].register);
+            const src2: u32 = @intFromEnum(code[pc + 3].register);
+
+            const op1 = stack[fp + src1];
+            const op2 = stack[fp + src2];
+            stack[fp + dst] = switch (opcode) {
+                .iadd => .{ .int = op1.int + op2.int },
+                .fadd => .{ .float = op1.float + op2.float },
+                .isub => .{ .int = op1.int - op2.int },
+                .fsub => .{ .float = op1.float - op2.float },
+                .imul => .{ .int = op1.int * op2.int },
+                .fmul => .{ .float = op1.float * op2.float },
+                .idiv => .{ .int = @divFloor(op1.int, op2.int) },
+                .fdiv => .{ .float = op1.float / op2.float },
+                .imod => .{ .int = @mod(op1.int, op2.int) },
+                .fmod => .{ .float = @mod(op1.float, op2.float) },
+                .ipow => .{ .int = std.math.pow(i64, op1.int, op2.int) },
+                .fpow => .{ .float = std.math.pow(f64, op1.float, op2.float) },
+                .bor => .{ .int = op1.int | op2.int },
+                .band => .{ .int = op1.int & op2.int },
+                .bxor => .{ .int = op1.int ^ op2.int },
+                .sll => .{ .int = op1.int << @truncate(@as(u64, @bitCast(op2.int))) },
+                .sra => .{ .int = op1.int >> @truncate(@as(u64, @bitCast(op2.int))) },
+                .ieq => .{ .int = @intFromBool(op1.int == op2.int) },
+                .ine => .{ .int = @intFromBool(op1.int != op2.int) },
+                .ilt => .{ .int = @intFromBool(op1.int < op2.int) },
+                .flt => .{ .int = @intFromBool(op1.float < op2.float) },
+                .igt => .{ .int = @intFromBool(op1.int > op2.int) },
+                .fgt => .{ .int = @intFromBool(op1.float > op2.float) },
+                .ile => .{ .int = @intFromBool(op1.int <= op2.int) },
+                .fle => .{ .int = @intFromBool(op1.float <= op2.float) },
+                .ige => .{ .int = @intFromBool(op1.int >= op2.int) },
+                .fge => .{ .int = @intFromBool(op1.float >= op2.float) },
+                else => unreachable,
+            };
+
+            next(pc + 4, code, fp, sp, stack);
+        }
+    }.binary;
 }
 
-fn mov(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].int = stack[op].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn itof(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].float = @floatFromInt(stack[op].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ftoi(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].int = @intFromFloat(stack[op].float);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ineg(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].int = -stack[op].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fneg(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].float = -stack[op].float;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn binv(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].int = ~stack[op].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn lnot(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op: u32 = @intFromEnum(payloads[pc].ops.unary);
-    stack[dst].int = @intFromBool(stack[op].int == 0);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn iadd(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int + stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fadd(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].float = stack[op1].float + stack[op2].float;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn isub(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int - stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fsub(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].float = stack[op1].float - stack[op2].float;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn imul(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int * stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fmul(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].float = stack[op1].float * stack[op2].float;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn idiv(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int * stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fdiv(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].float = stack[op1].float * stack[op2].float;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn imod(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @mod(stack[op1].int, stack[op2].int); // TODO: is this correct?
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fmod(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].float = @mod(stack[op1].float, stack[op2].float); // TODO: is this correct?
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ipow(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = std.math.pow(i64, stack[op1].int, stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fpow(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].float = std.math.pow(f64, stack[op1].float, stack[op2].float);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn bor(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int | stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn band(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int & stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn bxor(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int ^ stack[op2].int;
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn sll(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int << @truncate(@as(u64, @intCast(stack[op2].int)));
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn sra(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = stack[op1].int >> @truncate(@as(u64, @bitCast(stack[op2].int)));
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ieq(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].int == stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ine(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].int != stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ilt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].int < stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn flt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].float < stack[op2].float);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn igt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].int > stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fgt(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].float > stack[op2].float);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ile(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].int <= stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fle(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].float <= stack[op2].float);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn ige(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].int >= stack[op2].int);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn fge(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const dst: u32 = @intFromEnum(payloads[pc].dst);
-    const op1: u32 = @intFromEnum(payloads[pc].ops.binary.op1);
-    const op2: u32 = @intFromEnum(payloads[pc].ops.binary.op2);
-    stack[dst].int = @intFromBool(stack[op1].float >= stack[op2].float);
-    next(pc + 1, tags, payloads, stack);
-}
-
-fn branch(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const condition: u32 = @intFromEnum(payloads[pc].ops.branch.condition);
-    if (stack[condition].int == 1) {
-        const branch_target: u32 = payloads[pc].ops.branch.target;
-        next(branch_target, tags, payloads, stack);
+fn branch(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const condition = @intFromEnum(code[pc + 1].register);
+    if (stack[fp + condition].int == 1) {
+        const target = code[pc + 2].target;
+        next(target, code, fp, sp, stack);
     }
-    next(pc + 1, tags, payloads, stack);
+    next(pc + 2, code, fp, sp, stack);
 }
 
-fn jump(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    const target: u32 = payloads[pc].ops.target;
-    next(target, tags, payloads, stack);
+fn jump(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const target = code[pc + 1].target;
+    next(target, code, fp, sp, stack);
 }
 
-// fn call(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-//     const ir_data = try IrGen.generate(gpa, &pool, &tree, module_node);
-//     const ir_index = try pool.createIr(ir_data);
-//     const ir = pool.irPtr(ir_index);
-//     next(target, tags, payloads, stack);
-// }
+fn call(pc: u64, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
+    const target = code[pc + 1].target;
+    const fi: *FunctionInfo = @ptrCast(@alignCast(stack[rfp + target].ptr));
+    const pool: *InternPool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-fn exit(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
+    stack[rsp + 0].int = @bitCast(pc + 2);
+    stack[rsp + 1].int = @bitCast(rfp);
+    stack[rsp + 2].ptr = @constCast(code);
+    stack[rsp + 3].ptr = stack[rfp - 1].ptr;
+
+    if (fi.lazy_ir == null) {
+        const ir_data = IrGen.generate(.function, pool.gpa, pool, fi.tree, fi.node) catch unreachable;
+        fi.lazy_ir = pool.createIr(ir_data) catch unreachable;
+    }
+    const ir = pool.irPtr(fi.lazy_ir.?);
+    if (fi.lazy_bytecode == null) {
+        const bc_data = Assembler.assemble(pool.gpa, pool, ir) catch unreachable;
+        fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
+    }
+    const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+    // {
+    //     std.debug.print("bytecode listing for function:\n", .{});
+    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+    //     // _ = bytecode_renderer;
+    //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+    //     renderer.render() catch unreachable;
+    // }
+
+    const fp = rsp + 4;
+    const sp = fp + bc.register_count;
+    std.debug.print("calling\n", .{});
+    next(2, bc.code.ptr, fp, sp, stack);
+}
+
+fn ret(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     _ = pc;
-    _ = tags;
-    _ = payloads;
+    _ = code;
+    _ = sp;
+
+    const rsp = fp - 4;
+    const rfp: u64 = @bitCast(stack[rsp + 1].int);
+    const rpc: u64 = @bitCast(stack[rsp + 0].int);
+    const rcode: [*]const Word = @ptrCast(@alignCast(stack[rsp + 2].ptr));
+
+    std.debug.print("interpreter ret\n", .{});
+    next(rpc, rcode, rfp, rsp, stack);
+}
+
+fn exit(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    _ = pc;
+    _ = code;
+    _ = fp;
+    _ = sp;
     _ = stack;
 
     std.debug.print("interpreter exit\n", .{});
@@ -428,13 +274,12 @@ fn exit(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slo
     // while (true) {}
 }
 
-fn trap(pc: usize, tags: [*]const Tag, payloads: [*]const Payload, stack: [*]Slot) void {
-    _ = pc;
-    _ = tags;
-    _ = payloads;
+fn trap(pc: u64, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    _ = sp;
+    _ = fp;
     // _ = stack;
 
-    std.debug.print("trap\n", .{});
+    std.debug.print("trap at {s}\n", .{@tagName(code[pc].opcode)});
     std.debug.print("stack: ", .{});
     for (0..4) |i| std.debug.print("r{} = {}\n", .{ i, stack[i].int });
     std.debug.print("\n", .{});
