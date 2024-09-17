@@ -60,8 +60,16 @@ pub fn constant(bb: *BlockBuilder, ip: InternPool.Index) !Index {
     return bb.add(.{ .tag = .constant, .payload = .{ .ip = ip } });
 }
 
-pub fn arg(bb: *BlockBuilder, i: u32) !Index {
-    return bb.add(.{ .tag = .arg, .payload = .{ .arg = i } });
+pub fn arg(bb: *BlockBuilder, position: u32, ty: InternPool.Index) !Index {
+    return bb.add(.{
+        .tag = .arg,
+        .payload = .{
+            .arg = .{
+                .position = position,
+                .ty = ty,
+            },
+        },
+    });
 }
 
 pub fn builtin(bb: *BlockBuilder, ip: InternPool.Index) !Index {

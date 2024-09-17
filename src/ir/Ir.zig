@@ -42,6 +42,7 @@ pub const Inst = struct {
         // .ip
         builtin,
 
+        // TODO: only encode destination type
         // int to float
         // .unary
         itof,
@@ -54,6 +55,8 @@ pub const Inst = struct {
         // bool to int
         // .unary
         btoi,
+        // cast to any
+        any,
 
         // negation (unary subtraction)
         // .unary
@@ -134,7 +137,10 @@ pub const Inst = struct {
             op: Index,
             ip: InternPool.Index,
         },
-        arg: u32,
+        arg: struct {
+            position: u32,
+            ty: InternPool.Index,
+        },
 
         comptime {
             if (builtin.mode != .Debug) {
@@ -212,6 +218,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .ftoi => .int,
         .itob => .bool,
         .btoi => .int,
+        .any => .any,
         .binv => .int,
         .lnot => .bool,
         .add,
@@ -239,6 +246,7 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .ftoi,
         .itob,
         .btoi,
+        .any,
         .neg,
         .binv,
         .lnot,
@@ -281,6 +289,7 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
         .ftoi,
         .itob,
         .btoi,
+        .any,
         .neg,
         .binv,
         .lnot,

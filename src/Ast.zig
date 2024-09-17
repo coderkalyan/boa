@@ -11,11 +11,11 @@ pub const ByteOffset = u32;
 
 // represents the entire, immutable, AST of a source file, once parsed.
 // in-progess mutable parsing data is stored in the `Parser` struct in parser.zig
-// the AST owns the source, token list, node list, and node extra_data list
+// the AST owns the source, token list, node list, and node extra list
 source: [:0]const u8,
 tokens: TokenList.Slice,
 nodes: std.MultiArrayList(Node).Slice,
-extra_data: []Node.Index,
+extra: []u32,
 // errors: []const error_handler.SourceError,
 
 // we store an array of token tags and start locations
@@ -36,7 +36,7 @@ pub const TokenList = std.MultiArrayList(Token);
 // the AST node is a binary tree because the vast majority
 // of nodes only need two children (or fewer) and adding more
 // would be a waste. nodes that need to reference more children
-// use the extra_data array explained below in the `Ast` struct
+// use the extra array explained below in the `Ast` struct
 pub const Node = struct {
     // index to the "main" token representing this node, if applicable.
     // examples include 'fn' for function declarations, `let` for
@@ -51,12 +51,12 @@ pub const Node = struct {
     // each union member can hold up to
     // two u32 child references. these are either
     // `Index` types to index into the nodes array
-    // or `ExtraIndex` to index into the extra_data array
+    // or `ExtraIndex` to index into the extra array
     // zig doesn't have distinct integers, so this isn't
     // strictly type safe, but its done for readability
     //
     // extra data indices represent only the "start" of the
-    // unpacked extra data struct in the extra_data array
+    // unpacked extra data struct in the extra array
     pub const Data = union(enum) {
         // used for the null node at the beginning
         placeholder,
@@ -260,8 +260,8 @@ pub const Node = struct {
         },
     };
 
-    pub const Index = u32; // index into nodes array
-    pub const ExtraIndex = u32; // index into extra_data array
+    pub const Index = enum(u32) { null, _ }; // index into nodes array
+    pub const ExtraIndex = enum(u32) { _ }; // index into extra array
     pub const Tag = std.meta.Tag(Data);
 
     // represents a contigious range of nodes (subarray)
@@ -332,20 +332,21 @@ pub const Node = struct {
 };
 
 pub fn extraData(self: *const Ast, comptime T: type, index: Node.ExtraIndex) T {
-    const fields = std.meta.fields(T);
-    const base = index;
     var result: T = undefined;
+    const fields = std.meta.fields(T);
+    const base: u32 = @intFromEnum(index);
     inline for (fields, 0..) |field, i| {
-        comptime std.debug.assert(field.type == Node.Index);
-        @field(result, field.name) = self.extra_data[base + i];
+        switch (field.type) {
+            inline else => @field(result, field.name) = @enumFromInt(self.extra[base + i]),
+        }
     }
     return result;
 }
 
 pub fn extraSlice(tree: *const Ast, sl: Ast.Node.ExtraSlice) []const u32 {
-    const start: u32 = @intCast(sl.start);
-    const end: u32 = @intCast(sl.end);
-    return tree.extra_data[start..end];
+    const start = @intFromEnum(sl.start);
+    const end = @intFromEnum(sl.end);
+    return tree.extra[start..end];
 }
 
 pub fn tokenString(tree: *const Ast, index: TokenIndex) []const u8 {
@@ -358,15 +359,15 @@ pub fn tokenTag(tree: *const Ast, index: TokenIndex) Token.Tag {
 }
 
 pub fn mainToken(tree: *const Ast, node: Node.Index) TokenIndex {
-    return tree.nodes.items(.main_token)[node];
+    return tree.nodes.items(.main_token)[@intFromEnum(node)];
 }
 
 pub fn data(tree: *const Ast, node: Node.Index) Node.Data {
-    return tree.nodes.items(.data)[node];
+    return tree.nodes.items(.data)[@intFromEnum(node)];
 }
 
 pub fn tag(tree: *const Ast, node: Node.Index) Node.Tag {
-    return tree.nodes.items(.data)[node];
+    return tree.nodes.items(.data)[@intFromEnum(node)];
 }
 
 pub fn locateClosingBrace(tree: *const Ast, open: TokenIndex) TokenIndex {

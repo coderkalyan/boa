@@ -96,6 +96,7 @@ const Context = struct {
             .ftoi,
             .itob,
             .btoi,
+            .any,
             .neg,
             .binv,
             .lnot,

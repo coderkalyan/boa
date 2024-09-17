@@ -10,7 +10,6 @@ const Node = Ast.Node;
 const TokenIndex = Ast.TokenIndex;
 
 pub const Error = error{UnexpectedToken} || error{HandledUserError} || Allocator.Error;
-const null_node: Node.Index = 0;
 
 // parses a string of source characters into an abstract syntax tree
 // gpa: allocator for tree data that outlives this function call
@@ -35,10 +34,12 @@ pub fn parse(gpa: Allocator, source: [:0]const u8) Error!Ast {
     var parser = Parser.init(gpa, source, &tokens);
     defer parser.deinit();
 
-    _ = try parser.addNode(.{
+    const null_node = try parser.addNode(.{
         .main_token = .unused,
         .data = .{ .placeholder = {} },
     });
+    std.debug.assert(null_node == .null);
+
     _ = try parser.module();
 
     // for (parser.nodes.items(.data), parser.nodes.items(.main_token)) |data, tok| {
@@ -51,7 +52,7 @@ pub fn parse(gpa: Allocator, source: [:0]const u8) Error!Ast {
         .source = source,
         .tokens = tokens.toOwnedSlice(),
         .nodes = parser.nodes.toOwnedSlice(),
-        .extra_data = try parser.extra.toOwnedSlice(gpa),
+        .extra = try parser.extra.toOwnedSlice(gpa),
     };
 }
 
@@ -63,8 +64,8 @@ const Parser = struct {
     index: u32,
 
     nodes: std.MultiArrayList(Node),
-    extra: std.ArrayListUnmanaged(Node.Index),
-    scratch: std.ArrayList(Node.Index),
+    extra: std.ArrayListUnmanaged(u32),
+    scratch: std.ArrayList(u32),
     attributes: std.ArrayListUnmanaged(Node.Index),
 
     pub fn init(gpa: Allocator, source: []const u8, tokens: *Ast.TokenList) Parser {
@@ -75,7 +76,7 @@ const Parser = struct {
             .index = 0,
             .nodes = .{},
             .extra = .{},
-            .scratch = std.ArrayList(Node.Index).init(gpa),
+            .scratch = std.ArrayList(u32).init(gpa),
             .attributes = .{},
         };
     }
@@ -88,7 +89,7 @@ const Parser = struct {
     fn addNode(p: *Parser, node: Node) !Node.Index {
         const result: u32 = @intCast(p.nodes.len);
         try p.nodes.append(p.gpa, node);
-        return result;
+        return @enumFromInt(result);
     }
 
     fn setNode(p: *Parser, i: usize, node: Node) Node.Index {
@@ -136,15 +137,19 @@ const Parser = struct {
         return p.token_tags[p.index + offset];
     }
 
-    fn addExtra(p: *Parser, extra: anytype) Allocator.Error!Node.Index {
+    fn addExtra(p: *Parser, extra: anytype) Allocator.Error!Node.ExtraIndex {
+        const len: u32 = @intCast(p.extra.items.len);
         const fields = std.meta.fields(@TypeOf(extra));
         try p.extra.ensureUnusedCapacity(p.gpa, fields.len);
-        const len: u32 = @intCast(p.extra.items.len);
         inline for (fields) |field| {
-            comptime std.debug.assert(field.type == Node.Index);
-            p.extra.appendAssumeCapacity(@field(extra, field.name));
+            switch (field.type) {
+                inline else => {
+                    const num = @intFromEnum(@field(extra, field.name));
+                    p.extra.appendAssumeCapacity(num);
+                },
+            }
         }
-        return len;
+        return @enumFromInt(len);
     }
 
     pub fn extraSlice(p: *Parser, sl: Ast.Node.ExtraSlice) []const u32 {
@@ -158,8 +163,8 @@ const Parser = struct {
         try p.extra.appendSlice(p.gpa, sl);
         const end: u32 = @intCast(p.extra.items.len);
         return p.addExtra(Ast.Node.ExtraSlice{
-            .start = @intCast(start),
-            .end = @intCast(end),
+            .start = @enumFromInt(start),
+            .end = @enumFromInt(end),
         });
     }
 
@@ -172,7 +177,7 @@ const Parser = struct {
         while (true) {
             if (p.eat(surround.close)) |_| break;
             const element_node = try @call(.auto, element, .{p});
-            try p.scratch.append(element_node);
+            try p.scratch.append(@intFromEnum(element_node));
 
             if (p.current() == .comma) {
                 _ = p.eatCurrent();
@@ -298,7 +303,7 @@ const Parser = struct {
         while (true) {
             if (p.current() == .eof) break;
             const node = try p.statement();
-            try p.scratch.append(node);
+            try p.scratch.append(@intFromEnum(node));
         }
 
         const stmts = p.scratch.items[scratch_top..];
@@ -551,12 +556,63 @@ const Parser = struct {
         });
     }
 
+    inline fn typeExpression(p: *Parser) !Node.Index {
+        return p.postfixType();
+    }
+
+    fn postfixType(p: *Parser) Error!Node.Index {
+        const expr = try p.primaryType();
+        return expr;
+
+        // while (true) {
+        //     expr = switch (p.current()) {
+        //         .asterisk => try p.pointerType(expr),
+        //         .l_bracket => switch (p.next(1)) {
+        //             .r_bracket => try p.sliceType(expr),
+        //             .asterisk => try p.manyPointerType(expr),
+        //             .eof => return expr,
+        //             else => try p.arrayType(expr),
+        //         },
+        //         .k_mut => switch (p.next(1)) {
+        //             .asterisk => try p.pointerType(expr),
+        //             .l_bracket => switch (p.next(2)) {
+        //                 .r_bracket => try p.sliceType(expr),
+        //                 .asterisk => try p.manyPointerType(expr),
+        //                 .eof => return expr,
+        //                 else => try p.arrayType(expr),
+        //             },
+        //             else => return error.UnexpectedToken,
+        //         },
+        //         else => return expr,
+        //     };
+        // }
+    }
+
+    fn primaryType(p: *Parser) Error!Node.Index {
+        return switch (p.current()) {
+            // even though parentheses aren't necessary due to the ast
+            // being nested, they are added to facilitate 1-1 mapping between
+            // source and ast for tooling and testing
+            .l_paren => try p.typeExpression(),
+            // .k_struct => try p.structType(),
+            // .k_fn => try p.functionType(),
+            .ident => node: {
+                const ident_token = try p.expect(.ident);
+                break :node try p.addNode(.{
+                    .main_token = ident_token,
+                    .data = .{ .ident = {} },
+                });
+            },
+            else => unreachable,
+        };
+    }
+
     fn function(p: *Parser) !Node.Index {
         const def_token = try p.expect(.k_def);
         _ = try p.expect(.ident);
         const params = try p.parseList(param, .{ .open = .l_paren, .close = .r_paren });
 
-        const return_type: Node.Index = 0;
+        const return_type: Node.Index = .null;
         // if (p.eat(.minus_r_angle)) |_| {
         //     return_type = try p.typeExpression();
         // }
@@ -581,11 +637,10 @@ const Parser = struct {
 
     fn param(p: *Parser) !Node.Index {
         const ident_token = try p.expect(.ident);
-        const type_node: Node.Index = 0;
+        var type_node: Node.Index = .null;
         if (p.current() == .colon) {
             _ = p.eatCurrent();
-            // const type
-            unreachable; // TODO: implement this
+            type_node = try p.typeExpression();
         }
 
         return p.addNode(.{
@@ -649,7 +704,7 @@ const Parser = struct {
         while (true) {
             if (p.eat(.dedent)) |_| break;
             if (p.statement()) |stmt_node| {
-                try p.scratch.append(stmt_node);
+                try p.scratch.append(@intFromEnum(stmt_node));
             } else |err| switch (err) {
                 error.HandledUserError => continue,
                 else => return err,

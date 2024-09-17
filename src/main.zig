@@ -70,7 +70,7 @@ pub fn main() !void {
     var pool = try InternPool.init(gpa);
 
     // post order format guarantees that the module node will be the last
-    const module_node: u32 = @intCast(tree.nodes.len - 1);
+    const module_node: Node.Index = @enumFromInt(@as(u32, @intCast(tree.nodes.len - 1)));
     const ir_data = try IrGen.generate(.module, gpa, &pool, &tree, module_node);
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);

@@ -270,6 +270,7 @@ const Analysis = struct {
             .ftoi,
             .itob,
             .btoi,
+            .any,
             .neg,
             .binv,
             .lnot,

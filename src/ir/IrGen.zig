@@ -159,7 +159,7 @@ pub fn generate(
 fn moduleInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!void {
     const data = ig.tree.data(node).module;
     const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
-    const stmts = ig.tree.extraSlice(sl);
+    const stmts: []const Node.Index = @ptrCast(ig.tree.extraSlice(sl));
 
     for (stmts) |stmt| {
         try ig.statement(scope, stmt);
@@ -171,12 +171,17 @@ fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory
     const data = ig.tree.data(node).function;
     const signature = ig.tree.extraData(Node.FunctionSignature, data.signature);
     const slice = ig.tree.extraData(Node.ExtraSlice, signature.params);
-    const params = ig.tree.extraSlice(slice);
+    const params: []const Node.Index = @ptrCast(ig.tree.extraSlice(slice));
     for (params, 0..) |param, i| {
+        const param_data = ig.tree.data(node).param;
         const param_token = ig.tree.mainToken(param);
         const param_str = ig.tree.tokenString(param_token);
         const id = try ig.pool.put(.{ .str = param_str });
-        const arg = try ig.current_builder.arg(@intCast(i));
+
+        var ty: InternPool.Index = .any;
+        if (param_data != .null) ty = try ig.typeExpr(scope, node);
+
+        const arg = try ig.current_builder.arg(@intCast(i), ty);
         try inner.vars.put(ig.arena, id, arg);
     }
 
@@ -191,7 +196,7 @@ fn block(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupp
 fn blockInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!void {
     const data = ig.tree.data(node).block;
     const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
-    const stmts = ig.tree.extraSlice(sl);
+    const stmts: []const Node.Index = @ptrCast(ig.tree.extraSlice(sl));
 
     for (stmts) |stmt| {
         try ig.statement(scope, stmt);
@@ -207,7 +212,7 @@ fn blockLocals(
     _ = scope;
     const data = ig.tree.data(node).block;
     const sl = ig.tree.extraData(Node.ExtraSlice, data.stmts);
-    const stmts = ig.tree.extraSlice(sl);
+    const stmts: []const Node.Index = @ptrCast(ig.tree.extraSlice(sl));
 
     for (stmts) |stmt| {
         switch (ig.tree.data(stmt)) {
@@ -442,7 +447,7 @@ fn desugarRangeIterable(ig: *IrGen, iterable: Node.Index) !?RangeIterable {
     // at this point we know we have a range, just figure out how many
     // explicit args it has an fill in the implicit ones (start = 0, step = 1)
     const args_slice = ig.tree.extraData(Node.ExtraSlice, call_data.args);
-    const args = ig.tree.extraSlice(args_slice);
+    const args: []const Node.Index = @ptrCast(ig.tree.extraSlice(args_slice));
     return switch (args.len) {
         1 => .{ .start = null, .stop = args[0], .step = null },
         2 => .{ .start = args[0], .stop = args[1], .step = null },
@@ -575,6 +580,7 @@ const ResultInfo = struct {
         val,
         // the expression should generate a target (lvalue) that can be stored to
         ptr,
+        type,
     };
 };
 
@@ -586,6 +592,11 @@ inline fn valExpr(ig: *IrGen, s: *Scope, node: Node.Index) !Ir.Index {
 inline fn ptrExpr(b: *Scope.Block, s: *Scope, node: Node.Index) !Ir.Index {
     const ri: ResultInfo = .{ .semantics = .ptr };
     return expr(b, s, ri, node);
+}
+
+inline fn typeExpr(ig: *IrGen, s: *Scope, node: Node.Index) !Ir.Index {
+    const ri: ResultInfo = .{ .semantics = .type };
+    return ig.expr(s, ri, node);
 }
 
 fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
@@ -604,6 +615,10 @@ fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
         },
         .ptr => switch (ig.tree.data(node)) {
             // .ident => identExpr(b, scope, ri, node),
+            else => ig.unexpectedNode(node),
+        },
+        .type => switch (ig.tree.data(node)) {
+            .ident => ig.identExpr(scope, ri, node),
             else => ig.unexpectedNode(node),
         },
     };
@@ -716,10 +731,12 @@ fn stringLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 }
 
 fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
-    _ = ri;
     const ident_token = ig.tree.mainToken(node);
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
+
+    // TODO: inline this with other uses
+    if (ri.semantics == .type) return ig.current_builder.constant(id);
 
     switch (id) {
         .builtin_print,
@@ -841,6 +858,9 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, U
             .str => if (token_tag != .plus) return error.Unsupported,
             else => unreachable,
         },
+        // .any => {
+        //     if (rty != .any) r = try ig.current_builder.unary(.any, r);
+        // },
         else => unreachable, // TODO: implement
     }
 
@@ -1025,7 +1045,7 @@ inline fn typeOf(ig: *const IrGen, inst: Ir.Index) InternPool.Index {
 // propogate the unreachable into the corresponding clause in the caller's switch
 // to optimize the jump table
 fn unexpectedNode(ig: *IrGen, node: Node.Index) noreturn {
-    const data = ig.tree.nodes.items(.data)[node];
+    const data = ig.tree.data(node);
     std.debug.print("encountered unexpected node: {}\n", .{data});
     unreachable;
 }
