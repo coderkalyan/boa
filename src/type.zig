@@ -10,6 +10,7 @@ pub const Type = union(enum) {
     int: void,
     float: void,
     bool: void,
+    str: void,
     @"union": []const InternPool.Index,
     any: void,
 
@@ -24,6 +25,7 @@ pub const Type = union(enum) {
             .int => .{ .tag = .int_ty, .payload = .{ .placeholder = {} } },
             .float => .{ .tag = .float_ty, .payload = .{ .placeholder = {} } },
             .bool => .{ .tag = .bool_ty, .payload = .{ .placeholder = {} } },
+            .str => .{ .tag = .str_ty, .payload = .{ .placeholder = {} } },
             .@"union" => |types| {
                 const slice = try pool.addSlice(@ptrCast(types));
                 return .{ .tag = .union_ty, .payload = .{ .extra = slice } };
@@ -40,6 +42,7 @@ pub const Type = union(enum) {
             .int_ty => .{ .int = {} },
             .float_ty => .{ .float = {} },
             .bool_ty => .{ .bool = {} },
+            .str_ty => .{ .str = {} },
             .union_ty => {
                 const slice = pool.extraData(item.payload.extra, Item.ExtraSlice);
                 return .{ .@"union" = @ptrCast(pool.extraSlice(slice)) };
@@ -59,6 +62,7 @@ pub const Type = union(enum) {
             .int,
             .float,
             .bool,
+            .str,
             .any,
             => {},
             .@"union" => |types| hasher.update(asBytes(types)),
@@ -72,6 +76,7 @@ pub const Type = union(enum) {
         pub const int: Type = .{ .int = {} };
         pub const float: Type = .{ .float = {} };
         pub const @"bool": Type = .{ .bool = {} };
+        pub const str: Type = .{ .str = {} };
         pub const any: Type = .{ .any = {} };
     };
 };

@@ -38,6 +38,9 @@ pub const Inst = struct {
         st_global,
         // extract an argument
         arg,
+        // reference a builtin (must be called)
+        // .ip
+        builtin,
 
         // int to float
         // .unary
@@ -197,10 +200,14 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
     const payload = ir.insts.items(.payload)[index];
 
     return switch (tag) {
-        .constant => ir.pool.get(payload.ip).tv.ty,
+        .constant => switch (ir.pool.get(payload.ip)) {
+            .tv => |tv| tv.ty,
+            else => .str,
+        },
         .st_global => ir.typeOf(payload.unary_ip.op),
         .ld_global => .any,
         .arg => .int, // TODO: fix this
+        .builtin => unreachable, // TODO: implement this
         .itof => .float,
         .ftoi => .int,
         .itob => .bool,
@@ -226,7 +233,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
 
 pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
     return switch (tag) {
-        .constant, .ld_global => .ip,
+        .constant, .ld_global, .builtin => .ip,
         .st_global => .unary_ip,
         .itof,
         .ftoi,
@@ -269,7 +276,7 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
     const payload = ir.insts.items(.payload)[index];
 
     switch (tag) {
-        .constant, .ld_global, .arg => return &.{},
+        .constant, .ld_global, .arg, .builtin => return &.{},
         .itof,
         .ftoi,
         .itob,

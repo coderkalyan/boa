@@ -91,6 +91,7 @@ const Context = struct {
                 if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.unary_ip.op, inst);
                 if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst);
             },
+            .builtin => {}, // nothing to do here
             .itof,
             .ftoi,
             .itob,

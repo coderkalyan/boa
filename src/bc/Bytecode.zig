@@ -107,7 +107,15 @@ pub const Opcode = enum(u32) {
     // function call
     call,
     // schedules lazy compilation of a function and then enters it
+    // currently unused
     trampoline,
+
+    // return the length of a string (constant time field lookup)
+    strlen,
+    // catenate (join) two strings
+    strcat,
+    // repeat a string
+    strrep,
 
     // jump to index if register is true (1)
     branch,

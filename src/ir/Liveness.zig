@@ -265,6 +265,7 @@ const Analysis = struct {
             .ld_global => try analysis.ldGlobal(live_out, inst),
             .st_global => try analysis.stGlobal(live_out, inst),
             .arg => try analysis.argInst(live_out, inst),
+            .builtin => {}, // nothing to do here, doesn't generate insts (used by call)
             .itof,
             .ftoi,
             .itob,

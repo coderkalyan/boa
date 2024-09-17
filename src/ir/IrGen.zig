@@ -595,6 +595,7 @@ fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
             .bool_literal => ig.boolLiteral(scope, node),
             .integer_literal => ig.integerLiteral(scope, node),
             .float_literal => ig.floatLiteral(scope, node),
+            .string_literal => ig.stringLiteral(scope, node),
             .ident => ig.identExpr(scope, ri, node),
             .unary => ig.unaryExpr(scope, node),
             .binary => ig.binaryExpr(scope, node),
@@ -704,11 +705,28 @@ fn floatLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     return ig.current_builder.constant(ip);
 }
 
+fn stringLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    _ = scope;
+    const token = ig.tree.mainToken(node);
+    const token_str = ig.tree.tokenString(token);
+    const literal = token_str[1 .. token_str.len - 1];
+    const ip = try ig.pool.put(.{ .str = literal });
+
+    return ig.current_builder.constant(ip);
+}
+
 fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
     _ = ri;
     const ident_token = ig.tree.mainToken(node);
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
+
+    switch (id) {
+        .builtin_print,
+        .builtin_len,
+        => return ig.current_builder.builtin(id),
+        else => {},
+    }
 
     // how we treat the assignment depends on the context we're in -
     // module or function scope
@@ -773,6 +791,13 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, U
             .int => {},
             .float => l = try ig.current_builder.unary(.itof, l),
             .bool => r = try ig.current_builder.unary(.btoi, r),
+            .str => {
+                if (token_tag != .asterisk) return error.Unsupported;
+                // reorder so typeOf works correctly
+                const tmp = l;
+                l = r;
+                r = tmp;
+            },
             else => unreachable, // TODO: implement
         },
         .float => switch (rty) {
@@ -796,7 +821,25 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, U
                 l = try ig.current_builder.unary(.btoi, l);
                 r = try ig.current_builder.unary(.btoi, r);
             },
+            .str => {
+                if (token_tag != .asterisk) return error.Unsupported;
+                l = try ig.current_builder.unary(.btoi, l);
+                // reorder so typeOf works correctly
+                const tmp = l;
+                l = r;
+                r = tmp;
+            },
             else => unreachable, // TODO: implement
+        },
+        .str => switch (rty) {
+            .nonetype => return error.Unsupported,
+            .int => if (token_tag != .asterisk) return error.Unsupported,
+            .bool => {
+                if (token_tag != .asterisk) return error.Unsupported;
+                r = try ig.current_builder.unary(.btoi, r);
+            },
+            .str => if (token_tag != .plus) return error.Unsupported,
+            else => unreachable,
         },
         else => unreachable, // TODO: implement
     }

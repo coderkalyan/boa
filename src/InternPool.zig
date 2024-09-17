@@ -122,6 +122,7 @@ pub const Item = struct {
         int_ty,
         float_ty,
         bool_ty,
+        str_ty,
         union_ty,
         any_ty,
         none_tv,
@@ -173,6 +174,7 @@ pub const Index = enum(u32) {
     int,
     float,
     bool,
+    str,
     any,
 
     none,
@@ -181,6 +183,9 @@ pub const Index = enum(u32) {
     izero,
     ione,
     fzero,
+
+    builtin_print,
+    builtin_len,
 
     _,
 };
@@ -219,6 +224,7 @@ const static_keys = [_]Key{
     .{ .ty = Type.common.int },
     .{ .ty = Type.common.float },
     .{ .ty = Type.common.bool },
+    .{ .ty = Type.common.str },
     .{ .ty = Type.common.any },
     .{ .tv = TypedValue.common.none },
     .{ .tv = TypedValue.common.true },
@@ -226,6 +232,8 @@ const static_keys = [_]Key{
     .{ .tv = TypedValue.common.izero },
     .{ .tv = TypedValue.common.ione },
     .{ .tv = TypedValue.common.fzero },
+    .{ .str = "print" },
+    .{ .str = "len" },
 };
 
 pub fn init(gpa: Allocator) !InternPool {
@@ -327,6 +335,7 @@ pub fn get(pool: *const InternPool, _index: Index) Key {
         .int_ty,
         .float_ty,
         .bool_ty,
+        .str_ty,
         .union_ty,
         .any_ty,
         => .{ .ty = Type.deserialize(item, pool) },

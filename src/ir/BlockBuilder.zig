@@ -64,6 +64,10 @@ pub fn arg(bb: *BlockBuilder, i: u32) !Index {
     return bb.add(.{ .tag = .arg, .payload = .{ .arg = i } });
 }
 
+pub fn builtin(bb: *BlockBuilder, ip: InternPool.Index) !Index {
+    return bb.add(.{ .tag = .builtin, .payload = .{ .ip = ip } });
+}
+
 pub fn unary(bb: *BlockBuilder, tag: Ir.Inst.Tag, operand: Index) !Index {
     return bb.add(.{ .tag = tag, .payload = .{ .unary = operand } });
 }

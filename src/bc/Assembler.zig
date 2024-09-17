@@ -146,6 +146,7 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
         .ld_global => try self.ldGlobal(inst),
         .st_global => try self.stGlobal(inst),
         .arg => try self.argInst(inst),
+        .builtin => {}, // nothing here, used by call
         .itof,
         .ftoi,
         .itob,
@@ -433,6 +434,11 @@ fn constant(self: *Assembler, inst: Ir.Index) !void {
             try self.register_map.put(self.arena, inst, dst);
             try self.addLdi(dst, ip);
         },
+        .str => {
+            const dst = try self.allocate();
+            try self.register_map.put(self.arena, inst, dst);
+            try self.addLdi(dst, ip);
+        },
         else => unreachable,
     }
 }
@@ -462,10 +468,15 @@ fn argInst(self: *Assembler, inst: Ir.Index) !void {
 
 fn call(self: *Assembler, inst: Ir.Index) !void {
     const ir = self.ir;
-    const payload = self.ir.instPayload(inst).unary_extra;
+    const payload = ir.instPayload(inst).unary_extra;
     const ptr = payload.op;
     const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
     const args = ir.extraSlice(slice);
+
+    if (ir.instTag(ptr) == .builtin) {
+        try self.expandBuiltin(inst);
+        return;
+    }
 
     const target = self.register_map.get(ptr).?;
     if (self.rangeEnd(ptr) == inst) self.deallocate(target);
@@ -484,6 +495,36 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
         if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
         self.code.appendAssumeCapacity(.{ .register = arg });
     }
+}
+
+fn expandBuiltin(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
+    const payload = ir.instPayload(inst).unary_extra;
+    const builtin = payload.op;
+
+    const ip = self.ir.instPayload(builtin).ip;
+    switch (ip) {
+        .builtin_print => unreachable, // TODO: implement
+        .builtin_len => try self.builtinLen(inst),
+        else => unreachable,
+    }
+}
+
+fn builtinLen(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
+    const payload = ir.instPayload(inst).unary_extra;
+    const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+    const args: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+
+    std.debug.assert(args.len == 1);
+    std.debug.assert(ir.typeOf(args[0]) == .str);
+    const str = args[0];
+    const operand = self.register_map.get(str).?;
+    if (self.rangeEnd(str) == inst) self.deallocate(operand);
+
+    const dst = try self.allocate();
+    try self.register_map.put(self.arena, inst, dst);
+    try self.addUnary(.strlen, dst, operand);
 }
 
 fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
@@ -522,6 +563,11 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             .gt => .fgt,
             .le => .fle,
             .ge => .fge,
+            else => unreachable,
+        },
+        .str => switch (self.ir.instTag(inst)) {
+            .add => .strcat,
+            .mul => .strrep,
             else => unreachable,
         },
         else => unreachable,

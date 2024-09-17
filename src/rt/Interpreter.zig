@@ -5,6 +5,7 @@ const InternPool = @import("../InternPool.zig");
 const IrGen = @import("../ir/IrGen.zig");
 const Ir = @import("../ir/Ir.zig");
 const render = @import("../render.zig");
+const String = @import("string.zig").String;
 
 const Allocator = std.mem.Allocator;
 const Word = Bytecode.Word;
@@ -68,6 +69,9 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     binary(.fge), // fge
     call, // call
     trap, // trampoline
+    strlen, // strlen
+    strcat, // strcat
+    strrep, // strrep
     branch, // branch
     jump, // jump
     ret, // ret
@@ -104,9 +108,15 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
             .int => stack[fp + dst].int = @bitCast(tv.val.int), // TODO: should this be unsigned?
             .float => stack[fp + dst].float = tv.val.float,
             .bool => stack[fp + dst].int = @intFromBool(tv.val.bool),
+            .str => unreachable, // implemented in .str TODO: change this?
             .@"union", .any => unreachable,
         },
-        .str => unreachable, // TODO: implement
+        .str => |bytes| {
+            // load a string literal from the intern pool and construct a string
+            // on the heap
+            const str = String.init(pool.gpa, bytes) catch unreachable;
+            stack[fp + dst].ptr = @constCast(str);
+        },
         .function => |fi| stack[fp + dst].ptr = pool.functionPtr(fi),
     }
     next(pc + 3, code, fp, sp, stack);
@@ -201,6 +211,48 @@ inline fn binary(comptime opcode: Opcode) Handler {
             next(pc + 4, code, fp, sp, stack);
         }
     }.binary;
+}
+
+fn strlen(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
+    const src = code[pc + 2].register;
+    var pool: *InternPool = undefined;
+    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+
+    const str: *const String = @ptrCast(@alignCast(stack[fp + src].ptr));
+    stack[fp + dst].int = @intCast(str.len);
+
+    next(pc + 3, code, fp, sp, stack);
+}
+
+fn strcat(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
+    const src1 = code[pc + 2].register;
+    const src2 = code[pc + 3].register;
+    var pool: *InternPool = undefined;
+    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+
+    const a: *const String = @ptrCast(@alignCast(stack[fp + src1].ptr));
+    const b: *const String = @ptrCast(@alignCast(stack[fp + src2].ptr));
+    const str = String.catenate(pool.gpa, a, b) catch unreachable;
+    stack[fp + dst].ptr = @constCast(str);
+
+    next(pc + 4, code, fp, sp, stack);
+}
+
+fn strrep(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const dst = code[pc + 1].register;
+    const src1 = code[pc + 2].register;
+    const src2 = code[pc + 3].register;
+    var pool: *InternPool = undefined;
+    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+
+    const template: *const String = @ptrCast(@alignCast(stack[fp + src1].ptr));
+    const count: u64 = @intCast(stack[fp + src2].int);
+    const str = String.repeat(pool.gpa, template, count) catch unreachable;
+    stack[fp + dst].ptr = @constCast(str);
+
+    next(pc + 4, code, fp, sp, stack);
 }
 
 fn branch(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
