@@ -490,8 +490,9 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 },
                 .call => {
                     const target = self.readWord(&pc).register;
+                    const ret = self.readWord(&pc).register;
                     const count = self.readWord(&pc).count;
-                    try writer.print("x{}", .{target});
+                    try writer.print("x{}, x{}", .{ target, ret });
                     for (0..count) |_| {
                         const arg = self.readWord(&pc).register;
                         try writer.print(", x{}", .{arg});

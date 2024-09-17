@@ -217,7 +217,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .neg => ir.typeOf(payload.unary),
         .bor, .band, .bxor, .sll, .sra => .int,
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
-        .call => .any, // TODO: we can do better
+        .call => .int, //.any, // TODO: we can do better
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
         .phi => ir.extraData(Inst.Phi, payload.extra).ty,

@@ -598,6 +598,7 @@ fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
             .ident => ig.identExpr(scope, ri, node),
             .unary => ig.unaryExpr(scope, node),
             .binary => ig.binaryExpr(scope, node),
+            .call => ig.call(scope, node),
             else => ig.unexpectedNode(node),
         },
         .ptr => switch (ig.tree.data(node)) {
@@ -719,15 +720,19 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
         // local variables are zero cost, we just map the identifier
         // to the expression value
         .function => {
-            const ident_scope = scope.resolveIdent(id) orelse {
-                std.debug.print("unknown identifier: {s}\n", .{ident_str});
-                unreachable;
-            };
+            if (scope.resolveIdent(id)) |ident_scope| {
+                std.debug.assert(ident_scope.tag == .block);
+                // TODO: check if the type is undef-union and insert a guard
+                const ident_block = ident_scope.cast(Scope.Block).?;
+                return ident_block.vars.get(id).?;
+            }
 
-            std.debug.assert(ident_scope.tag == .block);
-            // TODO: check if the type is undef-union and insert a guard
-            const ident_block = ident_scope.cast(Scope.Block).?;
-            return ident_block.vars.get(id).?;
+            return ig.current_builder.ldGlobal(id);
+            // const ident_scope = scope.resolveIdent(id) orelse {
+            //     std.debug.print("unknown identifier: {s}\n", .{ident_str});
+            //     unreachable;
+            // };
+
         },
         .block => unreachable,
     }
@@ -938,7 +943,7 @@ fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     }
 }
 
-fn call(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+fn call(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const call_data = ig.tree.data(node).call;
     const slice = ig.tree.extraData(Node.ExtraSlice, call_data.args);
     const ast_args: []const Node.Index = @ptrCast(ig.tree.extraSlice(slice));

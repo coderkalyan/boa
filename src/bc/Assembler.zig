@@ -472,7 +472,7 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
 
-    try self.code.ensureUnusedCapacity(self.gpa, 3 + args.len);
+    try self.code.ensureUnusedCapacity(self.gpa, 4 + args.len);
     self.code.appendSliceAssumeCapacity(&.{
         .{ .opcode = .call },
         .{ .register = target },

@@ -240,6 +240,7 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
         fi.lazy_ir = pool.createIr(ir_data) catch unreachable;
         // const ir = pool.irPtr(fi.lazy_ir.?);
         // {
+        //     std.debug.print("ir listing for function:\n", .{});
         //     const ir_renderer = render.IrRenderer(2, @TypeOf(std.io.getStdOut().writer()));
         //     // _ = ir_renderer;
         //     var renderer = ir_renderer.init(std.io.getStdOut().writer(), pool.gpa, ir);
@@ -268,7 +269,7 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
 
 fn ret(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
-    // _ = sp;
+    _ = sp;
 
     const rsp = fp - 5;
     const rpc: usize = @bitCast(stack[rsp + 0].int);
@@ -277,10 +278,10 @@ fn ret(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst: u64 = @bitCast(stack[rsp + 3].int);
     stack[rfp + dst].int = stack[fp + src].int;
 
-    std.debug.print("interpreter ret\n", .{});
-    std.debug.print("stack:\n", .{});
-    for (fp..sp) |i| std.debug.print("x{} = {}\n", .{ i - fp, stack[i].int });
-    std.debug.print("\n", .{});
+    // std.debug.print("interpreter ret\n", .{});
+    // std.debug.print("stack:\n", .{});
+    // for (fp..sp) |i| std.debug.print("x{} = {}\n", .{ i - fp, stack[i].int });
+    // std.debug.print("\n", .{});
     next(rpc, rcode, rfp, rsp, stack);
 }
 
@@ -291,9 +292,9 @@ fn exit(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     _ = sp;
     _ = stack;
 
-    std.debug.print("interpreter exit\n", .{});
-    // std.debug.print("stack: ", .{});
-    // for (0..4) |i| std.debug.print("r{} = {}\n", .{ i, stack[i].int });
+    // std.debug.print("interpreter exit\n", .{});
+    // std.debug.print("stack:\n", .{});
+    // for (fp..sp) |i| std.debug.print("x{} = {}\n", .{ i - fp, stack[i].int });
     // std.debug.print("\n", .{});
     // while (true) {}
 }
