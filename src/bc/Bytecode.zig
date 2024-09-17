@@ -110,6 +110,12 @@ pub const Opcode = enum(u32) {
     // currently unused
     trampoline,
 
+    // print type
+    pint,
+    pfloat,
+    pbool,
+    pstr,
+
     // return the length of a string (constant time field lookup)
     strlen,
     // catenate (join) two strings

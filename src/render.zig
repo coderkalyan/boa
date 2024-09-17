@@ -426,6 +426,14 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     const arg = self.readWord(&pc).count;
                     try writer.print("x{}, a{}\n", .{ dst, arg });
                 },
+                .pint,
+                .pfloat,
+                .pbool,
+                .pstr,
+                => {
+                    const src = self.readWord(&pc).register;
+                    try writer.print("x{}\n", .{src});
+                },
                 .ineg,
                 .fneg,
                 .binv,
@@ -433,6 +441,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .mov,
                 .itof,
                 .ftoi,
+                .strlen,
                 => {
                     const dst = self.readWord(&pc).register;
                     const op = self.readWord(&pc).register;
@@ -482,6 +491,8 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .fle,
                 .ige,
                 .fge,
+                .strcat,
+                .strrep,
                 => {
                     const dst = self.readWord(&pc).register;
                     const op1 = self.readWord(&pc).register;

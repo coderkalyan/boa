@@ -346,6 +346,13 @@ fn addBinary(self: *Assembler, opcode: Opcode, dst: Register, src1: Register, sr
     });
 }
 
+fn addPrint(self: *Assembler, opcode: Opcode, src: Register) !void {
+    try self.code.appendSlice(self.gpa, &.{
+        .{ .opcode = opcode },
+        .{ .register = src },
+    });
+}
+
 fn addJump(self: *Assembler, target: u32) !void {
     try self.code.appendSlice(self.gpa, &.{
         .{ .opcode = .jump },
@@ -504,9 +511,32 @@ fn expandBuiltin(self: *Assembler, inst: Ir.Index) !void {
 
     const ip = self.ir.instPayload(builtin).ip;
     switch (ip) {
-        .builtin_print => unreachable, // TODO: implement
+        .builtin_print => try self.builtinPrint(inst),
         .builtin_len => try self.builtinLen(inst),
         else => unreachable,
+    }
+}
+
+fn builtinPrint(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
+    const payload = ir.instPayload(inst).unary_extra;
+    const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+    const args: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+
+    for (args) |arg| {
+        const ty = ir.typeOf(arg);
+        const operand = self.register_map.get(arg).?;
+        if (self.rangeEnd(arg) == inst) self.deallocate(operand);
+
+        const opcode: Opcode = switch (ty) {
+            .nonetype => unreachable, // TODO: unimplemented
+            .int => .pint,
+            .float => .pfloat,
+            .bool => .pfloat,
+            .str => .pstr,
+            else => unreachable,
+        };
+        try self.addPrint(opcode, operand);
     }
 }
 

@@ -69,6 +69,10 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     binary(.fge), // fge
     call, // call
     trap, // trampoline
+    pint, // pint
+    pfloat, // pfloat
+    pbool, // pbool
+    pstr, // pstr
     strlen, // strlen
     strcat, // strcat
     strrep, // strrep
@@ -349,6 +353,41 @@ fn exit(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     // for (fp..sp) |i| std.debug.print("x{} = {}\n", .{ i - fp, stack[i].int });
     // std.debug.print("\n", .{});
     // while (true) {}
+}
+
+fn pint(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const src = code[pc + 1].register;
+    const int = stack[fp + src].int;
+    std.debug.print("{}\n", .{int});
+
+    next(pc + 2, code, fp, sp, stack);
+}
+
+fn pfloat(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const src = code[pc + 1].register;
+    const float = stack[fp + src].float;
+    std.debug.print("{}\n", .{float});
+
+    next(pc + 2, code, fp, sp, stack);
+}
+
+fn pbool(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const src = code[pc + 1].register;
+    const int = stack[fp + src].int;
+    std.debug.print("{s}\n", .{if (int == 1) "True" else "False"});
+
+    next(pc + 2, code, fp, sp, stack);
+}
+
+fn pstr(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+    const src = code[pc + 1].register;
+    var pool: *InternPool = undefined;
+    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+
+    const str: *const String = @ptrCast(@alignCast(stack[fp + src].ptr));
+    std.debug.print("{s}\n", .{str.bytes()});
+
+    next(pc + 2, code, fp, sp, stack);
 }
 
 fn trap(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
