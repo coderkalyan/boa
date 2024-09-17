@@ -1,9 +1,7 @@
 def main():
-    a = True and False
-    b = not a
-    a = 123
-    b = 456
-    c = a - b
-    c = a + b
-    d = a * b + c
-    # TODO: /
+    a = 1 + 1
+    b = 1 + 1.0
+    c = 1 + True
+    # d = 1 + None
+
+main()
