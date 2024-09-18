@@ -26,6 +26,7 @@ phis: []const std.ArrayListUnmanaged(PrePass.PhiMarker),
 ranges: []const Ir.Index,
 patch: []std.ArrayListUnmanaged(Patch),
 block_starts: std.AutoHashMapUnmanaged(Ir.BlockIndex, u32),
+ic_count: u32,
 
 const Patch = struct {
     ir_inst: Ir.Index,
@@ -63,6 +64,7 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .ranges = prepass.ranges,
         .patch = patch,
         .block_starts = .{},
+        .ic_count = 0,
     };
 
     const pool_ptr: usize = @intFromPtr(pool);
@@ -79,6 +81,7 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
 
     return .{
         .register_count = @intCast(assembler.register_count),
+        .ic_count = assembler.ic_count,
         .code = try assembler.code.toOwnedSlice(assembler.gpa),
     };
 }
@@ -306,11 +309,12 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
     });
 }
 
-fn addLdg(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
+fn addLdg(self: *Assembler, dst: Register, ip: InternPool.Index, ic: u32) !void {
     try self.code.appendSlice(self.gpa, &.{
         .{ .opcode = .ldg },
         .{ .register = dst },
         .{ .ip = ip },
+        .{ .count = ic },
     });
 }
 
@@ -447,7 +451,8 @@ fn ldGlobal(self: *Assembler, inst: Ir.Index) !void {
     const ip = self.ir.instPayload(inst).ip;
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
-    try self.addLdg(dst, ip);
+    try self.addLdg(dst, ip, self.ic_count);
+    self.ic_count += 1;
 }
 
 fn stGlobal(self: *Assembler, inst: Ir.Index) !void {

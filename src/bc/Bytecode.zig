@@ -4,6 +4,7 @@ const Ir = @import("../ir/Ir.zig");
 const InternPool = @import("../InternPool.zig");
 
 register_count: u32,
+ic_count: u32,
 code: []const Word,
 
 pub const List = std.ArrayListUnmanaged(Word);

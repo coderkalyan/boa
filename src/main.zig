@@ -9,10 +9,12 @@ const InternPool = @import("InternPool.zig");
 const render = @import("render.zig");
 const Interpreter = @import("rt/Interpreter.zig");
 const Bytecode = @import("bc/Bytecode.zig");
+const Object = @import("rt/object.zig").Object;
+const ShapePool = @import("rt/ShapePool.zig");
 
 const posix = std.posix;
 const Node = Ast.Node;
-const GlobalMap = Interpreter.GlobalMap;
+const Shape = ShapePool.Shape;
 const asBytes = std.mem.asBytes;
 const max_file_size = std.math.maxInt(u32);
 const stack_size = 8 * 1024 * 1024;
@@ -109,8 +111,12 @@ pub fn main() !void {
 }
 
 pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !void {
-    var context = GlobalMap.init(gpa);
-    defer context.deinit();
+    var sp = try ShapePool.init(gpa);
+    const shape = try sp.createShape();
+    const shape_ptr = sp.shapePtr(shape);
+
+    const global = try Object.init(gpa, shape_ptr);
+    defer gpa.destroy(global);
 
     const stack_memory = try posix.mmap(
         null,
@@ -125,6 +131,7 @@ pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !vo
     const pool_ptr: usize = @intFromPtr(pool);
     const entry_bc: Bytecode = .{
         .register_count = 0,
+        .ic_count = 0,
         .code = &.{
             .{ .imm = @truncate(pool_ptr) },
             .{ .imm = @truncate(pool_ptr >> 32) },
@@ -139,6 +146,7 @@ pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !vo
         },
     };
 
-    stack[0].ptr = &context;
-    Interpreter.entry(2, entry_bc.code.ptr, 1, 1, stack);
+    stack[0].ptr = &sp;
+    stack[1].ptr = global;
+    Interpreter.entry(2, entry_bc.code.ptr, 2, 2, stack);
 }

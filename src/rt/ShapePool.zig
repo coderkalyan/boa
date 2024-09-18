@@ -18,7 +18,6 @@ pub const DescriptorSet = std.ArrayListUnmanaged(Descriptor);
 
 pub const Descriptor = struct {
     name: InternPool.Index,
-    type: InternPool.Index,
 };
 
 pub const Transition = struct {
@@ -88,6 +87,15 @@ pub fn shapePtr(pool: *ShapePool, index: ShapeIndex) *Shape {
     return pool.shapes.at(i);
 }
 
+pub fn attributeIndex(pool: *ShapePool, shape: *const Shape, key: InternPool.Index) ?u32 {
+    const descriptor_set = pool.descriptorSetPtr(shape.descriptor_set);
+    for (descriptor_set.items[0..shape.descriptor_count], 0..) |*descriptor, i| {
+        if (descriptor.name == key) return @intCast(i);
+    }
+
+    return null;
+}
+
 pub fn descriptorSetPtr(pool: *ShapePool, index: DescriptorSetIndex) *DescriptorSet {
     const i = @intFromEnum(index);
     return pool.descriptor_sets.at(i);
@@ -97,7 +105,6 @@ pub fn transition(
     pool: *ShapePool,
     shape: *Shape,
     name: InternPool.Index,
-    ty: InternPool.Index,
 ) !*Shape {
     for (shape.transitions.items) |*edge| {
         if (edge.name == name) return pool.shapePtr(edge.next);
@@ -113,7 +120,7 @@ pub fn transition(
         // if the existing shape has no transitions, we can reuse its descriptor set
         next_ptr.descriptor_set = shape.descriptor_set;
         const set_ptr = pool.descriptorSetPtr(next_ptr.descriptor_set);
-        try set_ptr.append(pool.gpa, .{ .name = name, .type = ty });
+        try set_ptr.append(pool.gpa, .{ .name = name });
     } else {
         const existing_ptr = pool.descriptorSetPtr(shape.descriptor_set);
 
@@ -125,7 +132,7 @@ pub fn transition(
         const set_ptr = pool.descriptorSetPtr(set_index);
         try set_ptr.ensureTotalCapacity(pool.gpa, next_ptr.descriptor_count);
         set_ptr.appendSliceAssumeCapacity(existing_ptr.items[0..shape.descriptor_count]);
-        set_ptr.appendAssumeCapacity(.{ .name = name, .type = ty });
+        set_ptr.appendAssumeCapacity(.{ .name = name });
     }
 
     // create an edge (transition) linking the old shape to the new

@@ -6,12 +6,15 @@ const IrGen = @import("../ir/IrGen.zig");
 const Ir = @import("../ir/Ir.zig");
 const render = @import("../render.zig");
 const String = @import("string.zig").String;
+const Object = @import("object.zig").Object;
+const ShapePool = @import("ShapePool.zig");
 
 const Allocator = std.mem.Allocator;
 const Word = Bytecode.Word;
 const Opcode = Bytecode.Opcode;
 const asBytes = std.mem.asBytes;
-pub const GlobalMap = std.AutoHashMap(InternPool.Index, i64);
+const Shape = ShapePool.Shape;
+// pub const GlobalMap = std.AutoHashMap(InternPool.Index, i64);
 const FunctionInfo = InternPool.FunctionInfo;
 
 pub const Slot = extern union {
@@ -146,16 +149,30 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 fn ldg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst = code[pc + 1].register;
     const ip = code[pc + 2].ip;
-    const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    slot(stack, fp, dst).int = context.get(ip).?;
-    next(pc + 3, code, fp, sp, stack);
+    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[0].ptr));
+    const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
+    const index = shape_pool.attributeIndex(global.shape, ip).?; // TODO: what if nonexistant
+    slot(stack, fp, dst).* = @bitCast(global.attributes.items[index]);
+    next(pc + 4, code, fp, sp, stack);
 }
 
 fn stg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const src = code[pc + 1].register;
+    const op = code[pc + 1].register;
     const ip = code[pc + 2].ip;
-    const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    context.put(ip, slot(stack, fp, src).int) catch unreachable;
+    var pool: *InternPool = undefined;
+    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+    const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
+    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[0].ptr));
+
+    // TODO: merge types
+    const src = slot(stack, fp, op);
+    if (shape_pool.attributeIndex(global.shape, ip)) |index| {
+        global.attributes.items[index] = @bitCast(src.*);
+        next(pc + 3, code, fp, sp, stack);
+    }
+
+    global.shape = shape_pool.transition(global.shape, ip) catch unreachable;
+    global.attributes.append(pool.gpa, src.int) catch unreachable;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -327,6 +344,9 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
         // }
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+    // TODO: allocate inline cache vectors faster with mmap
+    // const ic_vector = pool.gpa.alloc(u32, bc.ic_count) catch unreachable;
+    // stack[rsp + count + 4].ptr = ic_vector.ptr;
 
     const fp = rsp + count + 5;
     const sp = fp + bc.register_count;
