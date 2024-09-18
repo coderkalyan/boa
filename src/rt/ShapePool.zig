@@ -5,45 +5,40 @@ const Allocator = std.mem.Allocator;
 const ShapePool = @This();
 
 gpa: Allocator,
-shapes: std.SegmentedList(Shape, 0),
-shapes_free_list: std.ArrayListUnmanaged(ShapeIndex),
-descriptors: std.SegmentedList(Descriptor, 0),
-descriptors_free_list: std.ArrayListUnmanaged(DescriptorIndex),
-transitions: std.SegmentedList(Transitions, 0),
-transitions_free_list: std.ArrayListUnmanaged(TransitionsIndex),
+shapes: std.SegmentedList(Shape, 1),
+descriptor_sets: std.SegmentedList(DescriptorSet, 1),
 
 pub const Shape = struct {
-    descriptor: DescriptorIndex,
-    member_count: u32,
-    transitions: TransitionsIndex,
+    descriptor_set: DescriptorSetIndex,
+    descriptor_count: u32,
+    transitions: std.ArrayListUnmanaged(Transition),
 };
 
-pub const Descriptor = std.ArrayListUnmanaged(InternPool.Index);
-pub const Transitions = std.ArrayListUnmanaged(Transition);
+pub const DescriptorSet = std.ArrayListUnmanaged(Descriptor);
+
+pub const Descriptor = struct {
+    name: InternPool.Index,
+    type: InternPool.Index,
+};
 
 pub const Transition = struct {
-    member: InternPool.Index,
+    name: InternPool.Index,
     next: ShapeIndex,
 };
 
 pub const ShapeIndex = enum(u32) { _ };
-pub const DescriptorIndex = enum(u32) { empty, _ };
+pub const DescriptorSetIndex = enum(u32) { empty, _ };
 pub const TransitionsIndex = enum(u32) { _ };
 
 pub fn init(gpa: Allocator) !ShapePool {
     var pool: ShapePool = .{
         .gpa = gpa,
         .shapes = .{},
-        .shapes_free_list = .{},
-        .descriptors = .{},
-        .descriptors_free_list = .{},
-        .transitions = .{},
-        .transitions_free_list = .{},
+        .descriptor_sets = .{},
     };
 
     // add the .empty descriptor
-    const descriptor = try pool.createDescriptor();
-    std.debug.assert(descriptor == .empty);
+    try pool.descriptor_sets.append(gpa, .{});
 
     return pool;
 }
@@ -51,37 +46,26 @@ pub fn init(gpa: Allocator) !ShapePool {
 pub fn deinit(pool: *ShapePool) void {
     const gpa = pool.gpa;
     pool.shapes.deinit(gpa);
-    pool.shapes_free_list.deinit(gpa);
-    pool.descriptors.deinit(gpa);
-    pool.descriptors_free_list.deinit(gpa);
-    pool.transitions.deinit(gpa);
-    pool.transitions_free_list.deinit(gpa);
+    pool.descriptor_sets.deinit(gpa);
 }
 
-fn createShapeAssumeCapacity(
-    pool: *ShapePool,
-    descriptor: DescriptorIndex,
-    transitions: TransitionsIndex,
-) ShapeIndex {
-    const index = pool.shapes_free_list.pop();
-    const shape = pool.shapes.at(@intFromEnum(index));
-    shape.* = .{ .descriptor = descriptor, .member_count = 0, .transitions = transitions };
-    return index;
-}
-
-pub fn createShape(
-    pool: *ShapePool,
-    descriptor: DescriptorIndex,
-    transitions: TransitionsIndex,
-) !ShapeIndex {
-    // if out of space, allocate a new shape
-    if (pool.shapes_free_list.items.len == 0) {
-        const index: u32 = @intCast(pool.shapes.count());
-        _ = try pool.shapes.addOne(pool.gpa);
-        try pool.shapes_free_list.append(pool.gpa, @enumFromInt(index));
+pub fn createShape(pool: *ShapePool, descriptor_set: *const DescriptorSet) !ShapeIndex {
+    const index: u32 = @intCast(pool.shapes.count());
+    if (descriptor_set.items.len == 0) {
+        try pool.shapes.append(pool.gpa, .{
+            .descriptor_set = .empty,
+            .descriptor_count = 0,
+            .transitions = .{},
+        });
+    } else {
+        try pool.shapes.append(pool.gpa, .{
+            .descriptor_set = try descriptor_set.clone(pool.gpa),
+            .descriptor_count = 0,
+            .transitions = .{},
+        });
     }
 
-    return pool.createShapeAssumeCapacity(descriptor, transitions);
+    return @enumFromInt(index);
 }
 
 pub fn shapePtr(pool: *ShapePool, index: ShapeIndex) *Shape {
@@ -89,29 +73,57 @@ pub fn shapePtr(pool: *ShapePool, index: ShapeIndex) *Shape {
     return pool.shapes.at(i);
 }
 
-fn createDescriptorAssumeCapacity(
-    pool: *ShapePool,
-) DescriptorIndex {
-    const index = pool.descriptors_free_list.pop();
-    const descriptor = pool.descriptors.at(@intFromEnum(index));
-    descriptor.* = .{};
-    return index;
+pub fn descriptorSetPtr(pool: *ShapePool, index: DescriptorSetIndex) *Shape {
+    const i = @intFromEnum(index);
+    return pool.descriptors.at(i);
 }
 
-pub fn createDescriptor(
+pub fn transition(
     pool: *ShapePool,
-) !DescriptorIndex {
-    // if out of space, allocate a new shape
-    if (pool.descriptors_free_list.items.len == 0) {
-        const index: u32 = @intCast(pool.descriptors.count());
-        _ = try pool.descriptors.addOne(pool.gpa);
-        try pool.descriptors_free_list.append(pool.gpa, @enumFromInt(index));
+    shape: *Shape,
+    name: InternPool.Index,
+    ty: InternPool.Index,
+) !*Shape {
+    for (shape.transitions.items) |*edge| {
+        if (edge.name == name) return edge.next;
     }
 
-    return pool.createDescriptorAssumeCapacity();
+    // no existing transition, so create a new map (node) and transition (edge)
+    const next_index: u32 = @intCast(pool.shapes.count());
+    const next_ptr = try pool.shapes.addOne(pool.gpa);
+    next_ptr.descriptor_count = shape.descriptor_count + 1;
+    next_ptr.transitions = .{};
+
+    // create an edge (transition) linking the old shape to the new
+    try shape.transitions.append(pool.gpa, .{
+        .name = name,
+        .next = @enumFromInt(next_index),
+    });
+
+    if (shape.transitions.items.len == 0) {
+        // if the existing shape has no transitions, we can reuse its descriptor set
+        next_ptr.descriptor_set = shape.descriptor_set;
+    } else {
+        const existing_ptr = try pool.descriptor_sets.at(shape.descriptor_set);
+
+        const set_index: u32 = @intCast(pool.descriptor_sets.count());
+        next_ptr.descriptor_set = @enumFromInt(set_index);
+
+        const set_ptr = try pool.descriptor_sets.append(.{});
+        try set_ptr.ensureTotalCapacity(existing_ptr.items.len + 1);
+        set_ptr.appendSliceAssumeCapacity(existing_ptr.items);
+        set_ptr.appendAssumeCapacity(.{ .name = name, .type = ty });
+    }
 }
 
-pub fn descriptorPtr(pool: *ShapePool, index: ShapeIndex) *Shape {
-    const i = @intFromEnum(index);
-    return pool.shapes.at(i);
+test "shape transitions" {
+    var pool = try ShapePool.init(std.testing.allocator);
+    defer pool.deinit();
+
+    const shape0 = try pool.createShape(&.{});
+    const shape_ptr = try pool.shapePtr(shape0);
+    try std.testing.expectEqual(shape0, @as(ShapeIndex, @enumFromInt(0)));
+    try std.testing.expectEqual(shape_ptr.descriptor_set, DescriptorSet.empty);
+    try std.testing.expectEqual(shape_ptr.descriptor_count, 0);
+    try std.testing.expectEqual(shape_ptr.transitions.items.len, 0);
 }
