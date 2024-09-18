@@ -33,7 +33,6 @@ const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     ldGlobal, // ld_global
     stGlobal, // st_global
     unary(.mov), // mov
-    arg, // arg
     unary(.itof), // itof
     unary(.ftoi), // ftoi
     unary(.ineg), // ineg
@@ -92,10 +91,28 @@ inline fn next(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot)
     @call(.always_tail, handler, .{ pc, code, fp, sp, stack });
 }
 
+inline fn slot(stack: [*]Slot, fp: u64, register: Bytecode.Register) *Slot {
+    const temp: i128 = @intCast(fp);
+    const pos: u64 = @intCast(temp + register);
+    return &stack[pos];
+}
+
+// inline fn load(stack: [*]const Slot, fp: u64, register: Bytecode.Register) Slot {
+//     const temp: i128 = @intCast(fp);
+//     const pos: u64 = @intCast(temp + register);
+//     return stack[pos];
+// }
+//
+// inline fn store(stack: [*]const Slot, fp: u64, register: Bytecode.Register, val: Slot) void {
+//     const temp: i128 = @intCast(fp);
+//     const pos: u64 = @intCast(temp + register);
+//     stack[pos] = val;
+// }
+
 fn ld(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst = code[pc + 1].register;
     const imm = code[pc + 2].imm;
-    stack[fp + dst].int = imm;
+    slot(stack, fp, dst).int = imm;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -108,10 +125,10 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     switch (pool.get(ip)) {
         .ty, .ir, .bytecode => unreachable,
         .tv => |tv| switch (pool.get(tv.ty).ty) {
-            .nonetype => stack[fp + dst].int = undefined,
-            .int => stack[fp + dst].int = @bitCast(tv.val.int), // TODO: should this be unsigned?
-            .float => stack[fp + dst].float = tv.val.float,
-            .bool => stack[fp + dst].int = @intFromBool(tv.val.bool),
+            .nonetype => slot(stack, fp, dst).int = undefined,
+            .int => slot(stack, fp, dst).int = @bitCast(tv.val.int), // TODO: should this be unsigned?
+            .float => slot(stack, fp, dst).float = tv.val.float,
+            .bool => slot(stack, fp, dst).int = @intFromBool(tv.val.bool),
             .str => unreachable, // implemented in .str TODO: change this?
             .@"union", .any => unreachable,
         },
@@ -119,9 +136,9 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
             // load a string literal from the intern pool and construct a string
             // on the heap
             const str = String.init(pool.gpa, bytes) catch unreachable;
-            stack[fp + dst].ptr = @constCast(str);
+            slot(stack, fp, dst).ptr = @constCast(str);
         },
-        .function => |fi| stack[fp + dst].ptr = pool.functionPtr(fi),
+        .function => |fi| slot(stack, fp, dst).ptr = pool.functionPtr(fi),
     }
     next(pc + 3, code, fp, sp, stack);
 }
@@ -130,7 +147,7 @@ fn ldGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) vo
     const dst = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    stack[fp + dst].int = context.get(ip).?;
+    slot(stack, fp, dst).int = context.get(ip).?;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -138,14 +155,7 @@ fn stGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) vo
     const src = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    context.put(ip, stack[fp + src].int) catch unreachable;
-    next(pc + 3, code, fp, sp, stack);
-}
-
-fn arg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
-    const dst = code[pc + 1].register;
-    const i = code[pc + 2].count;
-    stack[fp + dst].int = stack[fp - 5 - i - 1].int;
+    context.put(ip, slot(stack, fp, src).int) catch unreachable;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -155,9 +165,9 @@ inline fn unary(comptime opcode: Opcode) Handler {
             const dst = code[pc + 1].register;
             const src = code[pc + 2].register;
 
-            const op = stack[fp + src];
-            stack[fp + dst] = switch (opcode) {
-                .mov => op,
+            const op = slot(stack, fp, src);
+            slot(stack, fp, dst).* = switch (opcode) {
+                .mov => op.*,
                 .itof => .{ .float = @floatFromInt(op.int) },
                 .ftoi => .{ .int = @intFromFloat(op.float) },
                 .ineg => .{ .int = -op.int },
@@ -179,9 +189,9 @@ inline fn binary(comptime opcode: Opcode) Handler {
             const src1 = code[pc + 2].register;
             const src2 = code[pc + 3].register;
 
-            const op1 = stack[fp + src1];
-            const op2 = stack[fp + src2];
-            stack[fp + dst] = switch (opcode) {
+            const op1 = slot(stack, fp, src1);
+            const op2 = slot(stack, fp, src2);
+            slot(stack, fp, dst).* = switch (opcode) {
                 .iadd => .{ .int = op1.int + op2.int },
                 .fadd => .{ .float = op1.float + op2.float },
                 .isub => .{ .int = op1.int - op2.int },
@@ -223,8 +233,8 @@ fn strlen(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-    const str: *const String = @ptrCast(@alignCast(stack[fp + src].ptr));
-    stack[fp + dst].int = @intCast(str.len);
+    const str: *const String = @ptrCast(@alignCast(slot(stack, fp, src).ptr));
+    slot(stack, fp, dst).int = @intCast(str.len);
 
     next(pc + 3, code, fp, sp, stack);
 }
@@ -236,10 +246,10 @@ fn strcat(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-    const a: *const String = @ptrCast(@alignCast(stack[fp + src1].ptr));
-    const b: *const String = @ptrCast(@alignCast(stack[fp + src2].ptr));
+    const a: *const String = @ptrCast(@alignCast(slot(stack, fp, src1).ptr));
+    const b: *const String = @ptrCast(@alignCast(slot(stack, fp, src2).ptr));
     const str = String.catenate(pool.gpa, a, b) catch unreachable;
-    stack[fp + dst].ptr = @constCast(str);
+    slot(stack, fp, dst).ptr = @constCast(str);
 
     next(pc + 4, code, fp, sp, stack);
 }
@@ -251,17 +261,17 @@ fn strrep(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-    const template: *const String = @ptrCast(@alignCast(stack[fp + src1].ptr));
-    const count: u64 = @intCast(stack[fp + src2].int);
+    const template: *const String = @ptrCast(@alignCast(slot(stack, fp, src1).ptr));
+    const count: u64 = @intCast(slot(stack, fp, src2).int);
     const str = String.repeat(pool.gpa, template, count) catch unreachable;
-    stack[fp + dst].ptr = @constCast(str);
+    slot(stack, fp, dst).ptr = @constCast(str);
 
     next(pc + 4, code, fp, sp, stack);
 }
 
 fn branch(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const condition = code[pc + 1].register;
-    if (stack[fp + condition].int == 1) {
+    if (slot(stack, fp, condition).int == 1) {
         const target = code[pc + 2].target;
         next(target, code, fp, sp, stack);
     }
@@ -282,7 +292,7 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
 
     for (0..count) |i| {
         const reg = code[pc + 4 + i].register;
-        stack[rsp + count - 1 - i].int = stack[rfp + reg].int;
+        stack[rsp + count - 1 - i].int = slot(stack, rfp, reg).int;
     }
 
     stack[rsp + count + 0].int = @bitCast(pc + 4 + count);
@@ -332,7 +342,7 @@ fn ret(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const rfp: u64 = @bitCast(stack[rsp + 1].int);
     const rcode: [*]const Word = @ptrCast(@alignCast(stack[rsp + 2].ptr));
     const dst: u64 = @bitCast(stack[rsp + 3].int);
-    stack[rfp + dst].int = stack[fp + src].int;
+    stack[rfp + dst].int = slot(stack, fp, src).int;
 
     // std.debug.print("interpreter ret\n", .{});
     // std.debug.print("stack:\n", .{});
@@ -357,7 +367,7 @@ fn exit(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 
 fn pint(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
-    const int = stack[fp + src].int;
+    const int = slot(stack, fp, src).int;
     std.debug.print("{}\n", .{int});
 
     next(pc + 2, code, fp, sp, stack);
@@ -365,7 +375,7 @@ fn pint(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 
 fn pfloat(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
-    const float = stack[fp + src].float;
+    const float = slot(stack, fp, src).float;
     std.debug.print("{}\n", .{float});
 
     next(pc + 2, code, fp, sp, stack);
@@ -373,7 +383,7 @@ fn pfloat(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
 
 fn pbool(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
-    const int = stack[fp + src].int;
+    const int = slot(stack, fp, src).int;
     std.debug.print("{s}\n", .{if (int == 1) "True" else "False"});
 
     next(pc + 2, code, fp, sp, stack);
@@ -384,7 +394,7 @@ fn pstr(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
-    const str: *const String = @ptrCast(@alignCast(stack[fp + src].ptr));
+    const str: *const String = @ptrCast(@alignCast(slot(stack, fp, src).ptr));
     std.debug.print("{s}\n", .{str.bytes()});
 
     next(pc + 2, code, fp, sp, stack);

@@ -26,8 +26,6 @@ pub const Opcode = enum(u32) {
     // move from register to register
     // .unary: src register
     mov,
-    // function argument
-    arg,
 
     // type casting
     // .unary: operand
@@ -133,7 +131,7 @@ pub const Opcode = enum(u32) {
     exit,
 };
 
-pub const Register = u32;
+pub const Register = i32;
 
 pub const Word = extern union {
     opcode: Opcode,

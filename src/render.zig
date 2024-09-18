@@ -421,11 +421,6 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try self.pool.print(writer, ip);
                     try writer.print("\n", .{});
                 },
-                .arg => {
-                    const dst = self.readWord(&pc).register;
-                    const arg = self.readWord(&pc).count;
-                    try writer.print("x{}, a{}\n", .{ dst, arg });
-                },
                 .pint,
                 .pfloat,
                 .pbool,

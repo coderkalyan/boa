@@ -322,14 +322,6 @@ fn addStGlobal(self: *Assembler, src: Register, ip: InternPool.Index) !void {
     });
 }
 
-fn addArg(self: *Assembler, dst: Register, arg: u32) !void {
-    try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .arg },
-        .{ .register = dst },
-        .{ .count = arg },
-    });
-}
-
 fn addUnary(self: *Assembler, opcode: Opcode, dst: Register, src: Register) !void {
     try self.code.appendSlice(self.gpa, &.{
         .{ .opcode = opcode },
@@ -469,9 +461,8 @@ fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
 
 fn argInst(self: *Assembler, inst: Ir.Index) !void {
     const arg = self.ir.instPayload(inst).arg;
-    const dst = try self.allocate();
-    try self.register_map.put(self.arena, inst, dst);
-    try self.addArg(dst, arg.position);
+    const pos: i32 = @intCast(arg.position);
+    try self.register_map.put(self.arena, inst, -6 - pos);
 }
 
 fn call(self: *Assembler, inst: Ir.Index) !void {
