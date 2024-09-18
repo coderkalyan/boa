@@ -240,7 +240,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
             //     return fi_ptr.return_type;
             // }
 
-            return .any;
+            return .int; // .any;
         },
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
