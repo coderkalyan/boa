@@ -212,7 +212,7 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         },
         .st_global => ir.typeOf(payload.unary_ip.op),
         .ld_global => .any,
-        .arg => .int, // TODO: fix this
+        .arg => payload.arg.ty,
         .builtin => unreachable, // TODO: implement this
         .itof => .float,
         .ftoi => .int,
@@ -231,7 +231,17 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
         .neg => ir.typeOf(payload.unary),
         .bor, .band, .bxor, .sll, .sra => .int,
         .eq, .ne, .lt, .gt, .le, .ge => .bool,
-        .call => .int, //.any, // TODO: we can do better
+        .call => {
+            // const target = payload.unary_extra.op;
+            // std.debug.print("{}\n", .{ir.instTag(target)});
+            // if (ir.instTag(target) == .constant) {
+            //     const findex = ir.pool.get(ir.instPayload(target).ip).function;
+            //     const fi_ptr = ir.pool.functionPtr(findex);
+            //     return fi_ptr.return_type;
+            // }
+
+            return .any;
+        },
         .ret => ir.typeOf(payload.unary),
         .jmp, .br => unreachable,
         .phi => ir.extraData(Inst.Phi, payload.extra).ty,

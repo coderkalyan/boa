@@ -173,13 +173,13 @@ fn functionInner(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory
     const slice = ig.tree.extraData(Node.ExtraSlice, signature.params);
     const params: []const Node.Index = @ptrCast(ig.tree.extraSlice(slice));
     for (params, 0..) |param, i| {
-        const param_data = ig.tree.data(node).param;
+        const param_data = ig.tree.data(param).param;
         const param_token = ig.tree.mainToken(param);
         const param_str = ig.tree.tokenString(param_token);
         const id = try ig.pool.put(.{ .str = param_str });
 
         var ty: InternPool.Index = .any;
-        if (param_data != .null) ty = try ig.typeExpr(scope, node);
+        if (param_data != .null) ty = try ig.typeExpr(scope, param_data);
 
         const arg = try ig.current_builder.arg(@intCast(i), ty);
         try inner.vars.put(ig.arena, id, arg);
@@ -580,7 +580,7 @@ const ResultInfo = struct {
         val,
         // the expression should generate a target (lvalue) that can be stored to
         ptr,
-        type,
+        // type,
     };
 };
 
@@ -594,9 +594,20 @@ inline fn ptrExpr(b: *Scope.Block, s: *Scope, node: Node.Index) !Ir.Index {
     return expr(b, s, ri, node);
 }
 
-inline fn typeExpr(ig: *IrGen, s: *Scope, node: Node.Index) !Ir.Index {
-    const ri: ResultInfo = .{ .semantics = .type };
-    return ig.expr(s, ri, node);
+inline fn typeExpr(ig: *IrGen, s: *Scope, node: Node.Index) !InternPool.Index {
+    _ = s;
+    const ident_token = ig.tree.mainToken(node);
+    const ident_str = ig.tree.tokenString(ident_token);
+    const id = try ig.pool.put(.{ .str = ident_str });
+
+    return switch (id) {
+        .builtin_int => .int,
+        .builtin_float => .float,
+        .builtin_bool => .bool,
+        else => unreachable,
+    };
+    // const ri: ResultInfo = .{ .semantics = .type };
+    // return ig.expr(s, ri, node);
 }
 
 fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
@@ -617,10 +628,10 @@ fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
             // .ident => identExpr(b, scope, ri, node),
             else => ig.unexpectedNode(node),
         },
-        .type => switch (ig.tree.data(node)) {
-            .ident => ig.identExpr(scope, ri, node),
-            else => ig.unexpectedNode(node),
-        },
+        // .type => switch (ig.tree.data(node)) {
+        //     .ident => ig.identExpr(scope, ri, node),
+        //     else => ig.unexpectedNode(node),
+        // },
     };
 }
 
@@ -731,12 +742,13 @@ fn stringLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 }
 
 fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
+    _ = ri;
     const ident_token = ig.tree.mainToken(node);
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
 
     // TODO: inline this with other uses
-    if (ri.semantics == .type) return ig.current_builder.constant(id);
+    // if (ri.semantics == .type) return ig.current_builder.constant(id);
 
     switch (id) {
         .builtin_print,
@@ -976,16 +988,22 @@ fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Un
 }
 
 fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const function_data = ig.tree.data(node).function;
+    const signature = ig.tree.extraData(Node.FunctionSignature, function_data.signature);
+
     const def_token = ig.tree.mainToken(node);
     const ident_token: Ast.TokenIndex = @enumFromInt(@intFromEnum(def_token) + 1);
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
 
+    var return_type: InternPool.Index = .any;
+    if (signature.ret != .null) return_type = try ig.typeExpr(scope, signature.ret);
     const findex = try ig.pool.createFunction(.{
         .tree = ig.tree,
         .node = node,
         .lazy_ir = null,
         .lazy_bytecode = null,
+        .return_type = return_type,
     });
     const ip = try ig.pool.put(.{ .function = findex });
 

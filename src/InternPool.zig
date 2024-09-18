@@ -43,6 +43,8 @@ pub const FunctionInfo = struct {
     node: Ast.Node.Index,
     lazy_ir: ?IrIndex,
     lazy_bytecode: ?BytecodeIndex,
+    // TODO: use a proper function type
+    return_type: InternPool.Index,
 };
 
 pub const Key = union(enum) {
@@ -184,6 +186,9 @@ pub const Index = enum(u32) {
     ione,
     fzero,
 
+    builtin_int,
+    builtin_float,
+    builtin_bool,
     builtin_print,
     builtin_len,
 
@@ -232,6 +237,9 @@ const static_keys = [_]Key{
     .{ .tv = TypedValue.common.izero },
     .{ .tv = TypedValue.common.ione },
     .{ .tv = TypedValue.common.fzero },
+    .{ .str = "int" },
+    .{ .str = "float" },
+    .{ .str = "bool" },
     .{ .str = "print" },
     .{ .str = "len" },
 };

@@ -612,10 +612,10 @@ const Parser = struct {
         _ = try p.expect(.ident);
         const params = try p.parseList(param, .{ .open = .l_paren, .close = .r_paren });
 
-        const return_type: Node.Index = .null;
-        // if (p.eat(.minus_r_angle)) |_| {
-        //     return_type = try p.typeExpression();
-        // }
+        var return_type: Node.Index = .null;
+        if (p.eat(.minus_r_angle)) |_| {
+            return_type = try p.typeExpression();
+        }
 
         const signature = try p.addExtra(Node.FunctionSignature{
             .params = params,

@@ -471,7 +471,7 @@ fn argInst(self: *Assembler, inst: Ir.Index) !void {
     const arg = self.ir.instPayload(inst).arg;
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
-    try self.addArg(dst, arg);
+    try self.addArg(dst, arg.position);
 }
 
 fn call(self: *Assembler, inst: Ir.Index) !void {

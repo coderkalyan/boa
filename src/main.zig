@@ -101,6 +101,7 @@ pub fn main() !void {
         .node = module_node,
         .lazy_ir = ir_index,
         .lazy_bytecode = bc_index,
+        .return_type = .nonetype,
     });
     const ip = try pool.put(.{ .function = findex });
 

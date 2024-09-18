@@ -307,14 +307,14 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     if (fi.lazy_bytecode == null) {
         const bc_data = Assembler.assemble(pool.gpa, pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
-        // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-        // {
-        //     std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
-        //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-        //     // _ = bytecode_renderer;
-        //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-        //     renderer.render() catch unreachable;
-        // }
+        const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+        {
+            std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
+            const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+            // _ = bytecode_renderer;
+            var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+            renderer.render() catch unreachable;
+        }
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
 
