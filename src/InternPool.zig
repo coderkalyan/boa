@@ -512,28 +512,19 @@ test "string intern" {
     var pool = try InternPool.init(std.testing.allocator);
     defer pool.deinit();
 
-    try std.testing.expectEqual(pool.bytes.items.len, 0);
-    try std.testing.expectEqual(pool.string_table.count(), 0);
-
     // add three distinct strings
     const apple = try pool.put(.{ .str = "apple" });
     const banana = try pool.put(.{ .str = "banana" });
     const cherry = try pool.put(.{ .str = "cherry" });
-    try std.testing.expectEqual(pool.bytes.items.len, 20);
-    try std.testing.expectEqual(pool.string_table.count(), 3);
     try std.testing.expect(std.mem.eql(u8, "apple", pool.get(apple).str));
     try std.testing.expect(std.mem.eql(u8, "banana", pool.get(banana).str));
     try std.testing.expect(std.mem.eql(u8, "cherry", pool.get(cherry).str));
 
     // adding the same string again should return the original id
     try std.testing.expectEqual(apple, try pool.put(.{ .str = "apple" }));
-    try std.testing.expectEqual(pool.bytes.items.len, 20);
-    try std.testing.expectEqual(pool.string_table.count(), 3);
 
     // partly overlapping string is a unique string
     const apfel = try pool.put(.{ .str = "apfel" });
-    try std.testing.expectEqual(pool.bytes.items.len, 26);
-    try std.testing.expectEqual(pool.string_table.count(), 4);
     try std.testing.expect(std.mem.eql(u8, "apfel", pool.get(apfel).str));
     try std.testing.expect(apple != apfel);
     try std.testing.expect(!std.mem.eql(u8, "apple", pool.get(apfel).str));

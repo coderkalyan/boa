@@ -4,6 +4,7 @@ const parse = @import("parse.zig");
 const InternPool = @import("InternPool.zig");
 const Scope = @import("ir/Scope.zig");
 const IrGen = @import("ir/IrGen.zig");
+const ShapePool = @import("rt/ShapePool.zig");
 
 comptime {
     _ = lex;
@@ -11,4 +12,5 @@ comptime {
     _ = InternPool;
     _ = Scope;
     _ = IrGen;
+    _ = ShapePool;
 }
