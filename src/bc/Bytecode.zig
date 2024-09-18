@@ -18,10 +18,10 @@ pub const Opcode = enum(u32) {
 
     // load the value of a global variable by identifier
     // .ip
-    ld_global,
+    ldg,
     // store a value in a global variable by identifier
     // .unary_ip
-    st_global,
+    stg,
 
     // move from register to register
     // .unary: src register

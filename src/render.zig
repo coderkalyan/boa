@@ -452,7 +452,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try writer.print("{}\n", .{target});
                 },
                 .exit => try writer.print("\n", .{}),
-                .ld_global, .st_global => {
+                .ldg, .stg => {
                     const dst = self.readWord(&pc).register;
                     const ip = self.readWord(&pc).ip;
                     try writer.print("x{}, ", .{dst});
@@ -510,76 +510,9 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try writer.print("x{}\n", .{val});
                 },
                 .trampoline => unreachable,
-                // else => {},
             }
             return pc;
         }
-
-        // fn renderInst(self: *Self, i: u32) !void {
-        //     const code = self.bc.code;
-        //     const writer = self.stream.writer();
-        //
-        //     const tag = code.items(.tag)[i];
-        //     if (tag == .pool) return;
-        //     const payload = code.items(.payload)[i];
-        //     const dst: u32 = @intFromEnum(payload.dst);
-        //
-        //     try writer.print("{s} ", .{@tagName(tag)});
-        //     switch (tag) {
-        //         .ld => {
-        //             var int: u32 = undefined;
-        //             var float: f32 = undefined;
-        //             @memcpy(asBytes(&int), &payload.ops.imm);
-        //             @memcpy(asBytes(&float), &payload.ops.imm);
-        //
-        //             try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
-        //         },
-        //         .ldw => {
-        //             var int: u64 = undefined;
-        //             var float: f64 = undefined;
-        //             @memcpy(asBytes(&int), &payload.ops.wimm);
-        //             @memcpy(asBytes(&float), &payload.ops.wimm);
-        //
-        //             try writer.print("x{}, 0x{x:0>16} ({})\n", .{ dst, int, float });
-        //         },
-        //         .ineg,
-        //         .fneg,
-        //         .binv,
-        //         .lnot,
-        //         .mov,
-        //         .itof,
-        //         .ftoi,
-        //         => {
-        //             const op: u32 = @intFromEnum(payload.ops.unary);
-        //             try writer.print("x{}, x{}\n", .{ dst, op });
-        //         },
-        //         .branch => {
-        //             const condition: u32 = @intFromEnum(payload.ops.branch.condition);
-        //             const target = payload.ops.branch.target;
-        //             const offset = @as(i64, target) - i;
-        //             try writer.print("x{}, {} ({})\n", .{ condition, target, offset });
-        //         },
-        //         .jump => {
-        //             const target = payload.ops.target;
-        //             const offset = @as(i64, target) - i;
-        //             try writer.print("{} ({})\n", .{ target, offset });
-        //         },
-        //         .exit => try writer.print("\n", .{}),
-        //         .ld_global => {
-        //             try self.pool.print(writer, payload.ops.ip);
-        //             try writer.print("\n", .{});
-        //         },
-        //         .st_global => {
-        //             try self.pool.print(writer, payload.ops.store.ip);
-        //             try writer.print(", %{}\n", .{@intFromEnum(payload.ops.store.val)});
-        //         },
-        //         else => {
-        //             const op1: u32 = @intFromEnum(payload.ops.binary.op1);
-        //             const op2: u32 = @intFromEnum(payload.ops.binary.op2);
-        //             try writer.print("x{}, x{}, x{}\n", .{ dst, op1, op2 });
-        //         },
-        //     }
-        // }
     };
 }
 

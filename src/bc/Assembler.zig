@@ -306,17 +306,17 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
     });
 }
 
-fn addLdGlobal(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
+fn addLdg(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .ld_global },
+        .{ .opcode = .ldg },
         .{ .register = dst },
         .{ .ip = ip },
     });
 }
 
-fn addStGlobal(self: *Assembler, src: Register, ip: InternPool.Index) !void {
+fn addStg(self: *Assembler, src: Register, ip: InternPool.Index) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .st_global },
+        .{ .opcode = .stg },
         .{ .register = src },
         .{ .ip = ip },
     });
@@ -447,7 +447,7 @@ fn ldGlobal(self: *Assembler, inst: Ir.Index) !void {
     const ip = self.ir.instPayload(inst).ip;
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
-    try self.addLdGlobal(dst, ip);
+    try self.addLdg(dst, ip);
 }
 
 fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
@@ -456,7 +456,7 @@ fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
 
     const val = self.register_map.get(payload.op).?;
     if (self.rangeEnd(payload.op) == inst) self.deallocate(val);
-    try self.addStGlobal(val, ip);
+    try self.addStg(val, ip);
 }
 
 fn argInst(self: *Assembler, inst: Ir.Index) !void {

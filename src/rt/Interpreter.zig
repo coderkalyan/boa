@@ -30,8 +30,8 @@ const Handler = *const fn (
 const jump_table: [std.meta.tags(Opcode).len]Handler = .{
     ld, // ld
     ldi, // ldi
-    ldGlobal, // ld_global
-    stGlobal, // st_global
+    ldg, // ld_global
+    stg, // st_global
     unary(.mov), // mov
     unary(.itof), // itof
     unary(.ftoi), // ftoi
@@ -143,7 +143,7 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     next(pc + 3, code, fp, sp, stack);
 }
 
-fn ldGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+fn ldg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
@@ -151,7 +151,7 @@ fn ldGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) vo
     next(pc + 3, code, fp, sp, stack);
 }
 
-fn stGlobal(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
+fn stg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
     const ip = code[pc + 2].ip;
     const context: *GlobalMap = @ptrCast(@alignCast(stack[fp - 1].ptr));
@@ -317,14 +317,14 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     if (fi.lazy_bytecode == null) {
         const bc_data = Assembler.assemble(pool.gpa, pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
-        const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-        {
-            std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
-            const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-            // _ = bytecode_renderer;
-            var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-            renderer.render() catch unreachable;
-        }
+        // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+        // {
+        //     std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
+        //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+        //     // _ = bytecode_renderer;
+        //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+        //     renderer.render() catch unreachable;
+        // }
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
 
