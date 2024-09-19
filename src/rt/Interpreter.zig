@@ -8,6 +8,7 @@ const render = @import("../render.zig");
 const String = @import("string.zig").String;
 const Object = @import("object.zig").Object;
 const ShapePool = @import("ShapePool.zig");
+const ConstantPool = @import("ConstantPool.zig");
 
 const Allocator = std.mem.Allocator;
 const Word = Bytecode.Word;
@@ -21,6 +22,20 @@ pub const Slot = extern union {
     int: i64,
     float: f64,
     ptr: *anyopaque,
+};
+
+pub const ContextFrame = extern struct {
+    pba: *const Allocator,
+    global_object: *Object,
+    shape_pool: *ShapePool,
+    constant_pool: *ConstantPool,
+    ic_vector: [*]u32,
+
+    comptime {
+        for (std.meta.fields(ContextFrame)) |field| {
+            std.debug.assert(@sizeOf(field.type) == @sizeOf(*anyopaque));
+        }
+    }
 };
 
 const Handler = *const fn (
@@ -100,6 +115,27 @@ fn slot(stack: [*]Slot, fp: u64, register: Bytecode.Register) *Slot {
     return &stack[pos];
 }
 
+fn contextFrameFieldType(comptime field_name: []const u8) type {
+    inline for (std.meta.fields(ContextFrame)) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) return field.type;
+    }
+
+    unreachable;
+}
+
+fn contextFieldPtr(
+    stack: [*]Slot,
+    comptime field_name: []const u8,
+) contextFrameFieldType(field_name) {
+    inline for (std.meta.fields(ContextFrame), 0..) |field, i| {
+        if (std.mem.eql(u8, field.name, field_name)) {
+            return @ptrCast(@alignCast(stack[i].ptr));
+        }
+    }
+
+    unreachable;
+}
+
 // inline fn load(stack: [*]const Slot, fp: u64, register: Bytecode.Register) Slot {
 //     const temp: i128 = @intCast(fp);
 //     const pos: u64 = @intCast(temp + register);
@@ -125,28 +161,7 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     // const base = index; //2 + index * 2;
     var pool: [*]const *anyopaque = undefined;
     pool = @ptrFromInt(code[2].imm | (@as(u64, code[3].imm) << 32));
-    // std.debug.print("ldi: index = {}, base = {}, code = {x} {x}\n", .{ index, base, code[base].imm, code[base + 1].imm });
     slot(stack, fp, dst).ptr = pool[index];
-    // const ip = code[pc + 2].ip;
-    //
-    // switch (pool.get(ip)) {
-    //     .ty, .ir, .bytecode => unreachable,
-    //     .tv => |tv| switch (pool.get(tv.ty).ty) {
-    //         .nonetype => slot(stack, fp, dst).int = undefined,
-    //         .int => slot(stack, fp, dst).int = @bitCast(tv.val.int), // TODO: should this be unsigned?
-    //         .float => slot(stack, fp, dst).float = tv.val.float,
-    //         .bool => slot(stack, fp, dst).int = @intFromBool(tv.val.bool),
-    //         .str => unreachable, // implemented in .str TODO: change this?
-    //         .@"union", .any => unreachable,
-    //     },
-    //     .str => |bytes| {
-    //         // load a string literal from the intern pool and construct a string
-    //         // on the heap
-    //         const str = String.init(pool.gpa, bytes) catch unreachable;
-    //         slot(stack, fp, dst).ptr = @constCast(str);
-    //     },
-    //     .function => |fi| slot(stack, fp, dst).ptr = pool.functionPtr(fi),
-    // }
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -155,14 +170,14 @@ fn ldg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const ip = code[pc + 2].ip;
     const ic = code[pc + 3].count;
 
-    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[1].ptr));
-    const ic_vector: [*]u32 = @ptrCast(@alignCast(stack[2].ptr));
-    const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
+    const global_object = contextFieldPtr(stack, "global_object");
+    const shape_pool = contextFieldPtr(stack, "shape_pool");
+    const ic_vector = contextFieldPtr(stack, "ic_vector");
     if (ic_vector[ic] == std.math.maxInt(u32)) {
-        ic_vector[ic] = shape_pool.attributeIndex(global.shape, ip).?; // TODO: what if nonexistant
+        ic_vector[ic] = shape_pool.attributeIndex(global_object.shape, ip).?; // TODO: what if nonexistant
     }
     const index = ic_vector[ic];
-    slot(stack, fp, dst).* = @bitCast(global.attributes.items[index]);
+    slot(stack, fp, dst).* = @bitCast(global_object.attributes.items[index]);
     next(pc + 4, code, fp, sp, stack);
 }
 
@@ -171,18 +186,18 @@ fn stg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const ip = code[pc + 2].ip;
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
-    const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[1].ptr));
+    const global_object = contextFieldPtr(stack, "global_object");
+    const shape_pool = contextFieldPtr(stack, "shape_pool");
 
     // TODO: merge types
     const src = slot(stack, fp, op);
-    if (shape_pool.attributeIndex(global.shape, ip)) |index| {
-        global.attributes.items[index] = @bitCast(src.*);
+    if (shape_pool.attributeIndex(global_object.shape, ip)) |index| {
+        global_object.attributes.items[index] = @bitCast(src.*);
         next(pc + 3, code, fp, sp, stack);
     }
 
-    global.shape = shape_pool.transition(global.shape, ip) catch unreachable;
-    global.attributes.append(pool.gpa, src.int) catch unreachable;
+    global_object.shape = shape_pool.transition(global_object.shape, ip) catch unreachable;
+    global_object.attributes.append(pool.gpa, src.int) catch unreachable;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -270,12 +285,11 @@ fn strcat(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
     const dst = code[pc + 1].register;
     const src1 = code[pc + 2].register;
     const src2 = code[pc + 3].register;
-    var pool: *InternPool = undefined;
-    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+    const pba = contextFieldPtr(stack, "pba");
 
     const a: *const String = @ptrCast(@alignCast(slot(stack, fp, src1).ptr));
     const b: *const String = @ptrCast(@alignCast(slot(stack, fp, src2).ptr));
-    const str = String.catenate(pool.gpa, a, b) catch unreachable;
+    const str = String.catenate(pba.*, a, b) catch unreachable;
     slot(stack, fp, dst).ptr = @constCast(str);
 
     next(pc + 4, code, fp, sp, stack);
@@ -342,7 +356,8 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     }
     const ir = pool.irPtr(fi.lazy_ir.?);
     if (fi.lazy_bytecode == null) {
-        const bc_data = Assembler.assemble(pool.gpa, pool, @ptrCast(@alignCast(stack[0].ptr)), ir) catch unreachable;
+        const constant_pool = contextFieldPtr(stack, "constant_pool");
+        const bc_data = Assembler.assemble(pool.gpa, pool, constant_pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
         // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
         // {
@@ -354,9 +369,6 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
         // }
     }
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-    // TODO: allocate inline cache vectors faster with mmap
-    // const ic_vector = pool.gpa.alloc(u32, bc.ic_count) catch unreachable;
-    // stack[rsp + count + 4].ptr = ic_vector.ptr;
 
     const fp = rsp + count + 5;
     const sp = fp + bc.register_count;

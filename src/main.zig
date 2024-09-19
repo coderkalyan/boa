@@ -124,9 +124,9 @@ pub fn interpret(
     constant_pool: *ConstantPool,
     fi_ip: InternPool.Index,
 ) !void {
-    var sp = try ShapePool.init(gpa);
-    const shape = try sp.createShape();
-    const shape_ptr = sp.shapePtr(shape);
+    var shape_pool = try ShapePool.init(gpa);
+    const shape = try shape_pool.createShape();
+    const shape_ptr = shape_pool.shapePtr(shape);
 
     const global = try Object.init(gpa, shape_ptr);
     defer gpa.destroy(global);
@@ -167,10 +167,21 @@ pub fn interpret(
 
     const ic_vector = try gpa.alloc(u32, 10);
     @memset(ic_vector, std.math.maxInt(u32));
+    var page_bump: PageBumpAllocator = .{};
+    const pba = page_bump.allocator();
 
-    stack[0].ptr = constant_pool;
-    stack[1].ptr = &sp;
-    stack[2].ptr = ic_vector.ptr;
-    stack[3].ptr = global;
-    Interpreter.entry(4, entry_bc.code.ptr, 4, 4, stack);
+    var context_frame: Interpreter.ContextFrame = .{
+        .pba = &pba,
+        .global_object = global,
+        .shape_pool = &shape_pool,
+        .constant_pool = constant_pool,
+        .ic_vector = ic_vector.ptr,
+    };
+
+    const context_slots = std.meta.fields(Interpreter.ContextFrame).len;
+    @memcpy(asBytes(stack[0..context_slots]), asBytes(&context_frame));
+
+    const fp = context_slots;
+    const sp = fp;
+    Interpreter.entry(4, entry_bc.code.ptr, fp, sp, stack);
 }
