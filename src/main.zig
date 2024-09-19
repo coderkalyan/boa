@@ -71,7 +71,9 @@ pub fn main() !void {
     // for (tree.nodes.items(.data), tree.nodes.items(.main_token)) |data, tok| {
     //     std.debug.print("{} {}\n", .{ data, tree.tokens.items(.tag)[tok] });
     // }
-    var pool = try InternPool.init(gpa);
+    var page_bump1: PageBumpAllocator = .{};
+    const pba1 = page_bump1.allocator();
+    var pool = try InternPool.init(pba1);
 
     // post order format guarantees that the module node will be the last
     const module_node: Node.Index = @enumFromInt(@as(u32, @intCast(tree.nodes.len - 1)));
