@@ -4,6 +4,7 @@ const Ir = @import("../ir/Ir.zig");
 const Bytecode = @import("Bytecode.zig");
 const PrePass = @import("PrePass.zig");
 const Liveness = @import("../ir/Liveness.zig");
+const ConstantPool = @import("../rt/ConstantPool.zig");
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
@@ -27,6 +28,9 @@ ranges: []const Ir.Index,
 patch: []std.ArrayListUnmanaged(Patch),
 block_starts: std.AutoHashMapUnmanaged(Ir.BlockIndex, u32),
 ic_count: u32,
+constant_pool: *ConstantPool,
+constants: std.ArrayListUnmanaged(*anyopaque),
+constant_map: std.AutoHashMapUnmanaged(InternPool.Index, u32),
 
 const Patch = struct {
     ir_inst: Ir.Index,
@@ -38,7 +42,12 @@ const Slot = struct {
     live: bool,
 };
 
-pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
+pub fn assemble(
+    gpa: Allocator,
+    pool: *InternPool,
+    constant_pool: *ConstantPool,
+    ir: *const Ir,
+) !Bytecode {
     var arena_allocator = std.heap.ArenaAllocator.init(gpa);
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
@@ -65,6 +74,9 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .patch = patch,
         .block_starts = .{},
         .ic_count = 0,
+        .constant_pool = constant_pool,
+        .constants = .{},
+        .constant_map = .{},
     };
 
     const pool_ptr: usize = @intFromPtr(pool);
@@ -73,16 +85,36 @@ pub fn assemble(gpa: Allocator, pool: *InternPool, ir: *const Ir) !Bytecode {
         .{ .imm = @truncate(pool_ptr >> 32) },
     });
 
+    _ = try assembler.code.addOne(assembler.gpa);
+    _ = try assembler.code.addOne(assembler.gpa);
+
     for (0..prepass.order.len) |i| {
         const current = prepass.order[i];
         const next = if (i == prepass.order.len - 1) undefined else prepass.order[i + 1];
         try assembler.generateBlock(current, next);
     }
 
+    const entry_pc: usize = 4;
+    const constants = try assembler.constants.toOwnedSlice(assembler.gpa);
+    const ptr: usize = @intFromPtr(constants.ptr);
+    assembler.code.items[2] = .{ .imm = @truncate(ptr) };
+    assembler.code.items[3] = .{ .imm = @truncate(ptr >> 32) };
+    // try assembler.code.ensureUnusedCapacity(assembler.gpa, assembler.constants.items.len * @sizeOf(usize) / @sizeOf(u32));
+    // for (assembler.constants.items) |item| {
+    //     const ptr = @intFromPtr(item);
+    //     std.debug.print("adding constant {x} at index {}\n", .{ ptr, entry_pc });
+    //     try assembler.code.appendSlice(assembler.gpa, entry_pc, &.{
+    //         .{ .imm = @truncate(ptr) },
+    //         .{ .imm = @truncate(ptr >> 32) },
+    //     });
+    //     entry_pc += 2;
+    // }
+
     return .{
         .register_count = @intCast(assembler.register_count),
         .ic_count = assembler.ic_count,
         .code = try assembler.code.toOwnedSlice(assembler.gpa),
+        .entry_pc = entry_pc,
     };
 }
 
@@ -302,10 +334,18 @@ fn addLd(self: *Assembler, dst: Register, imm: Immediate) !void {
 }
 
 fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
+    const gop = try self.constant_map.getOrPut(self.arena, ip);
+    if (!gop.found_existing) {
+        const ptr = try self.constant_pool.put(self.pool, ip);
+        const index: u32 = @intCast(self.constants.items.len);
+        try self.constants.append(self.gpa, ptr);
+        gop.value_ptr.* = index;
+    }
+
     try self.code.appendSlice(self.gpa, &.{
         .{ .opcode = .ldi },
         .{ .register = dst },
-        .{ .ip = ip },
+        .{ .count = gop.value_ptr.* },
     });
 }
 

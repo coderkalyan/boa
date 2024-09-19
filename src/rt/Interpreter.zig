@@ -94,7 +94,7 @@ inline fn next(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot)
     @call(.always_tail, handler, .{ pc, code, fp, sp, stack });
 }
 
-inline fn slot(stack: [*]Slot, fp: u64, register: Bytecode.Register) *Slot {
+fn slot(stack: [*]Slot, fp: u64, register: Bytecode.Register) *Slot {
     const temp: i128 = @intCast(fp);
     const pos: u64 = @intCast(temp + register);
     return &stack[pos];
@@ -121,28 +121,32 @@ fn ld(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 
 fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst = code[pc + 1].register;
-    const ip = code[pc + 2].ip;
-    var pool: *InternPool = undefined;
-    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
-
-    switch (pool.get(ip)) {
-        .ty, .ir, .bytecode => unreachable,
-        .tv => |tv| switch (pool.get(tv.ty).ty) {
-            .nonetype => slot(stack, fp, dst).int = undefined,
-            .int => slot(stack, fp, dst).int = @bitCast(tv.val.int), // TODO: should this be unsigned?
-            .float => slot(stack, fp, dst).float = tv.val.float,
-            .bool => slot(stack, fp, dst).int = @intFromBool(tv.val.bool),
-            .str => unreachable, // implemented in .str TODO: change this?
-            .@"union", .any => unreachable,
-        },
-        .str => |bytes| {
-            // load a string literal from the intern pool and construct a string
-            // on the heap
-            const str = String.init(pool.gpa, bytes) catch unreachable;
-            slot(stack, fp, dst).ptr = @constCast(str);
-        },
-        .function => |fi| slot(stack, fp, dst).ptr = pool.functionPtr(fi),
-    }
+    const index = code[pc + 2].count;
+    // const base = index; //2 + index * 2;
+    var pool: [*]const *anyopaque = undefined;
+    pool = @ptrFromInt(code[2].imm | (@as(u64, code[3].imm) << 32));
+    // std.debug.print("ldi: index = {}, base = {}, code = {x} {x}\n", .{ index, base, code[base].imm, code[base + 1].imm });
+    slot(stack, fp, dst).ptr = pool[index];
+    // const ip = code[pc + 2].ip;
+    //
+    // switch (pool.get(ip)) {
+    //     .ty, .ir, .bytecode => unreachable,
+    //     .tv => |tv| switch (pool.get(tv.ty).ty) {
+    //         .nonetype => slot(stack, fp, dst).int = undefined,
+    //         .int => slot(stack, fp, dst).int = @bitCast(tv.val.int), // TODO: should this be unsigned?
+    //         .float => slot(stack, fp, dst).float = tv.val.float,
+    //         .bool => slot(stack, fp, dst).int = @intFromBool(tv.val.bool),
+    //         .str => unreachable, // implemented in .str TODO: change this?
+    //         .@"union", .any => unreachable,
+    //     },
+    //     .str => |bytes| {
+    //         // load a string literal from the intern pool and construct a string
+    //         // on the heap
+    //         const str = String.init(pool.gpa, bytes) catch unreachable;
+    //         slot(stack, fp, dst).ptr = @constCast(str);
+    //     },
+    //     .function => |fi| slot(stack, fp, dst).ptr = pool.functionPtr(fi),
+    // }
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -151,8 +155,8 @@ fn ldg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const ip = code[pc + 2].ip;
     const ic = code[pc + 3].count;
 
-    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[0].ptr));
-    const ic_vector: [*]u32 = @ptrCast(@alignCast(stack[1].ptr));
+    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[1].ptr));
+    const ic_vector: [*]u32 = @ptrCast(@alignCast(stack[2].ptr));
     const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
     if (ic_vector[ic] == std.math.maxInt(u32)) {
         ic_vector[ic] = shape_pool.attributeIndex(global.shape, ip).?; // TODO: what if nonexistant
@@ -168,7 +172,7 @@ fn stg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     var pool: *InternPool = undefined;
     pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
     const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[0].ptr));
+    const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[1].ptr));
 
     // TODO: merge types
     const src = slot(stack, fp, op);
@@ -338,7 +342,7 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     }
     const ir = pool.irPtr(fi.lazy_ir.?);
     if (fi.lazy_bytecode == null) {
-        const bc_data = Assembler.assemble(pool.gpa, pool, ir) catch unreachable;
+        const bc_data = Assembler.assemble(pool.gpa, pool, @ptrCast(@alignCast(stack[0].ptr)), ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
         // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
         // {
@@ -356,7 +360,7 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
 
     const fp = rsp + count + 5;
     const sp = fp + bc.register_count;
-    next(2, bc.code.ptr, fp, sp, stack);
+    next(bc.entry_pc, bc.code.ptr, fp, sp, stack);
 }
 
 fn ret(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {

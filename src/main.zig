@@ -11,6 +11,8 @@ const Interpreter = @import("rt/Interpreter.zig");
 const Bytecode = @import("bc/Bytecode.zig");
 const Object = @import("rt/object.zig").Object;
 const ShapePool = @import("rt/ShapePool.zig");
+const ConstantPool = @import("rt/ConstantPool.zig");
+const PageBumpAllocator = @import("PageBumpAllocator.zig");
 
 const posix = std.posix;
 const Node = Ast.Node;
@@ -87,7 +89,11 @@ pub fn main() !void {
 
     try writer.print("\n", .{});
 
-    const bc_data = try Assembler.assemble(gpa, &pool, ir);
+    var page_bump: PageBumpAllocator = .{};
+    const pba = page_bump.allocator();
+    var constant_pool = ConstantPool.init(gpa, pba);
+
+    const bc_data = try Assembler.assemble(gpa, &pool, &constant_pool, ir);
     const bc_index = try pool.createBytecode(bc_data);
     // const bc = pool.bytecodePtr(bc_index);
     // {
@@ -107,10 +113,15 @@ pub fn main() !void {
     });
     const ip = try pool.put(.{ .function = findex });
 
-    try interpret(gpa, &pool, ip);
+    try interpret(gpa, &pool, &constant_pool, ip);
 }
 
-pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !void {
+pub fn interpret(
+    gpa: Allocator,
+    pool: *InternPool,
+    constant_pool: *ConstantPool,
+    fi_ip: InternPool.Index,
+) !void {
     var sp = try ShapePool.init(gpa);
     const shape = try sp.createShape();
     const shape_ptr = sp.shapePtr(shape);
@@ -129,27 +140,35 @@ pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !vo
     const stack: [*]Interpreter.Slot = @ptrCast(stack_memory.ptr);
 
     const pool_ptr: usize = @intFromPtr(pool);
+    const fi_ptr = pool.functionPtr(pool.get(fi_ip).function);
+    const constants: []const *anyopaque = &.{fi_ptr};
+    const ptr: usize = @intFromPtr(constants.ptr);
     const entry_bc: Bytecode = .{
         .register_count = 0,
         .ic_count = 0,
         .code = &.{
             .{ .imm = @truncate(pool_ptr) },
             .{ .imm = @truncate(pool_ptr >> 32) },
+            .{ .imm = @truncate(ptr) },
+            .{ .imm = @truncate(ptr >> 32) },
             .{ .opcode = .ldi },
             .{ .register = 0 },
-            .{ .ip = fi_ip },
+            .{ .count = 0 },
             .{ .opcode = .call },
             .{ .register = 0 },
             .{ .register = 0 },
             .{ .count = 0 },
             .{ .opcode = .exit },
         },
+        .entry_pc = 2,
     };
 
     const ic_vector = try gpa.alloc(u32, 10);
     @memset(ic_vector, std.math.maxInt(u32));
-    stack[0].ptr = &sp;
-    stack[1].ptr = ic_vector.ptr;
-    stack[2].ptr = global;
-    Interpreter.entry(2, entry_bc.code.ptr, 3, 3, stack);
+
+    stack[0].ptr = constant_pool;
+    stack[1].ptr = &sp;
+    stack[2].ptr = ic_vector.ptr;
+    stack[3].ptr = global;
+    Interpreter.entry(4, entry_bc.code.ptr, 4, 4, stack);
 }

@@ -384,7 +384,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
         }
 
         pub fn render(self: *Self) !void {
-            var pc: u32 = 2;
+            var pc: u32 = @intCast(self.bc.entry_pc);
             while (pc < self.bc.code.len) {
                 pc = try self.renderInst(pc);
             }

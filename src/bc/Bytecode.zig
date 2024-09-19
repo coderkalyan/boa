@@ -6,6 +6,7 @@ const InternPool = @import("../InternPool.zig");
 register_count: u32,
 ic_count: u32,
 code: []const Word,
+entry_pc: usize,
 
 pub const List = std.ArrayListUnmanaged(Word);
 

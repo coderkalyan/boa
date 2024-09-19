@@ -3,7 +3,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const String = extern struct {
-    len: usize,
+    len: u32,
     ptr: void align(@alignOf(u8)),
 
     pub fn init(gpa: Allocator, slice: []const u8) !*const String {
@@ -16,7 +16,7 @@ pub const String = extern struct {
         const size = len + @sizeOf(String);
         const container = try gpa.alignedAlloc(u8, @alignOf(String), size);
         const str: *String = @ptrCast(@alignCast(container));
-        str.len = len;
+        str.len = @intCast(len);
 
         return str;
     }
