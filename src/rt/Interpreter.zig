@@ -9,6 +9,7 @@ const String = @import("string.zig").String;
 const Object = @import("object.zig").Object;
 const ShapePool = @import("ShapePool.zig");
 const ConstantPool = @import("ConstantPool.zig");
+const builtins = @import("builtins.zig");
 
 const Allocator = std.mem.Allocator;
 const Word = Bytecode.Word;
@@ -184,10 +185,9 @@ fn ldg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 fn stg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const op = code[pc + 1].register;
     const ip = code[pc + 2].ip;
-    var pool: *InternPool = undefined;
-    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
     const global_object = contextFieldPtr(stack, "global_object");
     const shape_pool = contextFieldPtr(stack, "shape_pool");
+    const pba = contextFieldPtr(stack, "pba");
 
     // TODO: merge types
     const src = slot(stack, fp, op);
@@ -197,7 +197,7 @@ fn stg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     }
 
     global_object.shape = shape_pool.transition(global_object.shape, ip) catch unreachable;
-    global_object.attributes.append(pool.gpa, src.int) catch unreachable;
+    global_object.attributes.append(pba.*, src.int) catch unreachable;
     next(pc + 3, code, fp, sp, stack);
 }
 
@@ -299,12 +299,11 @@ fn strrep(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void
     const dst = code[pc + 1].register;
     const src1 = code[pc + 2].register;
     const src2 = code[pc + 3].register;
-    var pool: *InternPool = undefined;
-    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
+    const pba = contextFieldPtr(stack, "pba");
 
     const template: *const String = @ptrCast(@alignCast(slot(stack, fp, src1).ptr));
     const count: u64 = @intCast(slot(stack, fp, src2).int);
-    const str = String.repeat(pool.gpa, template, count) catch unreachable;
+    const str = String.repeat(pba.*, template, count) catch unreachable;
     slot(stack, fp, dst).ptr = @constCast(str);
 
     next(pc + 4, code, fp, sp, stack);
@@ -325,16 +324,22 @@ fn jump(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 }
 
 fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
-    const target = code[pc + 1].target;
-    const dst = code[pc + 2].register;
     const count = code[pc + 3].count;
-    const fi: *FunctionInfo = @ptrCast(@alignCast(stack[rfp + target].ptr));
-    const pool: *InternPool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
     for (0..count) |i| {
         const reg = code[pc + 4 + i].register;
         stack[rsp + count - 1 - i].int = slot(stack, rfp, reg).int;
     }
+
+    @call(.always_tail, invoke, .{ pc, code, rfp, rsp, stack });
+}
+
+fn invoke(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void {
+    const target = code[pc + 1].target;
+    const dst = code[pc + 2].register;
+    const count = code[pc + 3].count;
+    const fi: *FunctionInfo = @ptrCast(@alignCast(stack[rfp + target].ptr));
+    const pool: *InternPool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
     stack[rsp + count + 0].int = @bitCast(pc + 4 + count);
     stack[rsp + count + 1].int = @bitCast(rfp);
@@ -342,32 +347,8 @@ fn call(pc: usize, code: [*]const Word, rfp: u64, rsp: u64, stack: [*]Slot) void
     stack[rsp + count + 3].int = dst;
     stack[rsp + count + 4].ptr = stack[rfp - 1].ptr;
 
-    if (fi.lazy_ir == null) {
-        const ir_data = IrGen.generate(.function, pool.gpa, pool, fi.tree, fi.node) catch unreachable;
-        fi.lazy_ir = pool.createIr(ir_data) catch unreachable;
-        // const ir = pool.irPtr(fi.lazy_ir.?);
-        // {
-        //     std.debug.print("ir listing for function:\n", .{});
-        //     const ir_renderer = render.IrRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-        //     // _ = ir_renderer;
-        //     var renderer = ir_renderer.init(std.io.getStdOut().writer(), pool.gpa, ir);
-        //     renderer.render() catch unreachable;
-        // }
-    }
-    const ir = pool.irPtr(fi.lazy_ir.?);
-    if (fi.lazy_bytecode == null) {
-        const constant_pool = contextFieldPtr(stack, "constant_pool");
-        const bc_data = Assembler.assemble(pool.gpa, pool, constant_pool, ir) catch unreachable;
-        fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
-        // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-        // {
-        //     std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
-        //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-        //     // _ = bytecode_renderer;
-        //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-        //     renderer.render() catch unreachable;
-        // }
-    }
+    const constant_pool = contextFieldPtr(stack, "constant_pool");
+    builtins.lazyCompileFunction(pool, constant_pool, fi) catch unreachable;
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
 
     const fp = rsp + count + 5;
@@ -433,8 +414,6 @@ fn pbool(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void 
 
 fn pstr(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
-    var pool: *InternPool = undefined;
-    pool = @ptrFromInt(code[0].imm | (@as(u64, code[1].imm) << 32));
 
     const str: *const String = @ptrCast(@alignCast(slot(stack, fp, src).ptr));
     std.debug.print("{s}\n", .{str.bytes()});
