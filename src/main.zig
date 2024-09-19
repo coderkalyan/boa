@@ -146,7 +146,10 @@ pub fn interpret(gpa: Allocator, pool: *InternPool, fi_ip: InternPool.Index) !vo
         },
     };
 
+    const ic_vector = try gpa.alloc(u32, 10);
+    @memset(ic_vector, std.math.maxInt(u32));
     stack[0].ptr = &sp;
-    stack[1].ptr = global;
-    Interpreter.entry(2, entry_bc.code.ptr, 2, 2, stack);
+    stack[1].ptr = ic_vector.ptr;
+    stack[2].ptr = global;
+    Interpreter.entry(2, entry_bc.code.ptr, 3, 3, stack);
 }

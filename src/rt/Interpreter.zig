@@ -149,9 +149,15 @@ fn ldi(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
 fn ldg(pc: usize, code: [*]const Word, fp: u64, sp: u64, stack: [*]Slot) void {
     const dst = code[pc + 1].register;
     const ip = code[pc + 2].ip;
+    const ic = code[pc + 3].count;
+
     const shape_pool: *ShapePool = @ptrCast(@alignCast(stack[0].ptr));
+    const ic_vector: [*]u32 = @ptrCast(@alignCast(stack[1].ptr));
     const global: *Object = @ptrCast(@alignCast(stack[fp - 1].ptr));
-    const index = shape_pool.attributeIndex(global.shape, ip).?; // TODO: what if nonexistant
+    if (ic_vector[ic] == std.math.maxInt(u32)) {
+        ic_vector[ic] = shape_pool.attributeIndex(global.shape, ip).?; // TODO: what if nonexistant
+    }
+    const index = ic_vector[ic];
     slot(stack, fp, dst).* = @bitCast(global.attributes.items[index]);
     next(pc + 4, code, fp, sp, stack);
 }
