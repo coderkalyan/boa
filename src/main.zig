@@ -19,7 +19,8 @@ const Node = Ast.Node;
 const Shape = ShapePool.Shape;
 const asBytes = std.mem.asBytes;
 const max_file_size = std.math.maxInt(u32);
-const stack_size = 8 * 1024 * 1024;
+const value_stack_size = 8 * 1024 * 1024;
+const call_stack_size = 1 * 1024 * 1024;
 
 pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
     var file = try std.fs.cwd().openFile(input_filename, .{});
@@ -57,23 +58,9 @@ pub fn main() !void {
     const out = std.io.getStdOut();
     var buffered_out = std.io.bufferedWriter(out.writer());
     const writer = buffered_out.writer();
-    // _ = writer;
-
-    // var lexer = try Lexer.init(source, arena.allocator());
-    // while (true) {
-    //     const token = try lexer.next(arena.allocator());
-    //     // std.debug.print("{s} '{s}'\n", .{ @tagName(token.tag), source[token.loc.start..token.loc.end] });
-    //     if (token.tag == .eof) break;
-    //     if (token.tag == .newline) std.debug.print("\n", .{});
-    // }
 
     const tree = try parse.parse(gpa, source);
-    // for (tree.nodes.items(.data), tree.nodes.items(.main_token)) |data, tok| {
-    //     std.debug.print("{} {}\n", .{ data, tree.tokens.items(.tag)[tok] });
-    // }
-    var page_bump1: PageBumpAllocator = .{};
-    const pba1 = page_bump1.allocator();
-    var pool = try InternPool.init(pba1);
+    var pool = try InternPool.init(gpa);
 
     // post order format guarantees that the module node will be the last
     const module_node: Node.Index = @enumFromInt(@as(u32, @intCast(tree.nodes.len - 1)));
@@ -131,15 +118,23 @@ pub fn interpret(
     const global = try Object.init(gpa, shape_ptr);
     defer gpa.destroy(global);
 
-    const stack_memory = try posix.mmap(
+    const value_stack = try posix.mmap(
         null,
-        stack_size,
+        value_stack_size,
         posix.PROT.READ | posix.PROT.WRITE,
         .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
         -1,
         0,
     );
-    const stack: [*]Interpreter.Slot = @ptrCast(stack_memory.ptr);
+
+    const call_stack = try posix.mmap(
+        null,
+        call_stack_size,
+        posix.PROT.READ | posix.PROT.WRITE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
 
     const pool_ptr: usize = @intFromPtr(pool);
     const fi_ptr = pool.functionPtr(pool.get(fi_ip).function);
@@ -149,14 +144,14 @@ pub fn interpret(
         .register_count = 0,
         .ic_count = 0,
         .code = &.{
-            .{ .imm = @truncate(pool_ptr) },
+            .{ .imm = @truncate(pool_ptr) }, // intern pool
             .{ .imm = @truncate(pool_ptr >> 32) },
-            .{ .imm = @truncate(ptr) },
+            .{ .imm = @truncate(ptr) }, // constant array
             .{ .imm = @truncate(ptr >> 32) },
-            .{ .opcode = .ldi },
+            .{ .opcode = .ldi }, // ldi x0, constants[0]
             .{ .register = 0 },
             .{ .count = 0 },
-            .{ .opcode = .call },
+            .{ .opcode = .call }, // call x0, x0
             .{ .register = 0 },
             .{ .register = 0 },
             .{ .count = 0 },
@@ -179,9 +174,21 @@ pub fn interpret(
     };
 
     const context_slots = std.meta.fields(Interpreter.ContextFrame).len;
+    const stack: [*]Interpreter.Slot = @ptrCast(value_stack.ptr);
     @memcpy(asBytes(stack[0..context_slots]), asBytes(&context_frame));
+    var fp = context_slots;
 
-    const fp = context_slots;
-    const sp = fp;
-    Interpreter.entry(4, entry_bc.code.ptr, fp, sp, stack);
+    const call_frame: Interpreter.CallFrame = .{
+        .code = entry_bc.code.ptr,
+        .pc = undefined,
+        .fp = fp,
+        .register_count = 1,
+        .return_register = undefined,
+    };
+    @memcpy(call_stack[0..@sizeOf(Interpreter.CallFrame)], asBytes(&call_frame));
+
+    stack[fp].ptr = &call_stack.ptr[0];
+    fp += 1;
+
+    Interpreter.entry(4, entry_bc.code.ptr, fp, stack);
 }

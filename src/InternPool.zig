@@ -9,6 +9,7 @@ const Bytecode = @import("bc/Bytecode.zig");
 const InternPool = @This();
 const Allocator = std.mem.Allocator;
 
+magic: u64 = 0xcafeb0bacafeb0ba,
 gpa: Allocator,
 // used to map keys to indices in `items` using standard
 // hashing and probing
@@ -39,6 +40,7 @@ pub const BytecodeIndex = enum(u32) { toplevel, _ };
 pub const FunctionIndex = enum(u32) { _ };
 
 pub const FunctionInfo = struct {
+    magic: u64 = 0xcafeb0bacafeb0ba,
     tree: *const Ast,
     node: Ast.Node.Index,
     lazy_ir: ?IrIndex,

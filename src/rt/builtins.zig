@@ -4,11 +4,16 @@ const Assembler = @import("../bc/Assembler.zig");
 const InternPool = @import("../InternPool.zig");
 const String = @import("string.zig").String;
 const ConstantPool = @import("ConstantPool.zig");
+const Interpreter = @import("Interpreter.zig");
+const Bytecode = @import("../bc/Bytecode.zig");
 
 const Allocator = std.mem.Allocator;
 const FunctionInfo = InternPool.FunctionInfo;
+const Slot = Interpreter.Slot;
+const Word = Bytecode.Word;
+const asBytes = std.mem.asBytes;
 
-pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: *FunctionInfo) !void {
+pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: *FunctionInfo) !*const Bytecode {
     if (fi.lazy_ir == null) {
         const ir_data = try IrGen.generate(.function, pool.gpa, pool, fi.tree, fi.node);
         fi.lazy_ir = try pool.createIr(ir_data);
@@ -35,4 +40,8 @@ pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: 
         //     renderer.render() catch unreachable;
         // }
     }
+
+    // std.debug.print("bytecode index: {}\n", .{fi.lazy_bytecode.?});
+    const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+    return bc;
 }

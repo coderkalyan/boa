@@ -509,7 +509,6 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     const val = self.readWord(&pc).register;
                     try writer.print("x{}\n", .{val});
                 },
-                .trampoline => unreachable,
             }
             return pc;
         }

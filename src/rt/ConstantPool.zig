@@ -5,6 +5,7 @@ const String = @import("string.zig").String;
 const Allocator = std.mem.Allocator;
 const ConstantPool = @This();
 
+magic: u64 = 0xcafeb0bacafeb0ba,
 gpa: Allocator,
 // while this function takes in an allocator, it is highly recommended to use with
 // a contiguous allocator like the internal PageBumpAllocator, ArenaAllocator, or

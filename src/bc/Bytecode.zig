@@ -106,9 +106,6 @@ pub const Opcode = enum(u32) {
 
     // function call
     call,
-    // schedules lazy compilation of a function and then enters it
-    // currently unused
-    trampoline,
 
     // print type
     pint,

@@ -266,6 +266,7 @@ fn allocate(self: *Assembler) !Register {
 }
 
 fn deallocate(self: *Assembler, register: Register) void {
+    if (register < 0) return; // TODO: find out why this is a thing
     self.free_registers.appendAssumeCapacity(register);
 }
 
@@ -507,7 +508,9 @@ fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
 fn argInst(self: *Assembler, inst: Ir.Index) !void {
     const arg = self.ir.instPayload(inst).arg;
     const pos: i32 = @intCast(arg.position);
-    try self.register_map.put(self.arena, inst, -6 - pos);
+    // arguments are indexed as -1, -2,... but stack[fp - 1] is the call frame pointer
+    // so we start at -2
+    try self.register_map.put(self.arena, inst, -2 - pos);
 }
 
 fn call(self: *Assembler, inst: Ir.Index) !void {
