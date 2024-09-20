@@ -371,8 +371,7 @@ fn invoke(pc: usize, code: [*]const Word, fp: u64, stack: [*]Slot) void {
     const caller_frame: [*]CallFrame = @ptrCast(@alignCast(slot(stack, fp, -1).ptr));
 
     // ask the runtime to lazily compile our function
-    // std.debug.print("fi magic: {x} {x} {x}\n", .{ fi.magic, intern_pool.magic, constant_pool.magic });
-    const bc = @call(.never_inline, builtins.lazyCompileFunction, .{ intern_pool, constant_pool, fi }) catch unreachable;
+    const bc = builtins.lazyCompileFunction(intern_pool, constant_pool, fi) catch unreachable;
 
     // now that we have our bytecode, setup a call frame for the callee and trampoline into it
     const callee_frame = &caller_frame[1];
@@ -384,13 +383,11 @@ fn invoke(pc: usize, code: [*]const Word, fp: u64, stack: [*]Slot) void {
     const sp = fp + caller_frame[0].register_count + argument_count + 1;
     slot(stack, sp, -1).ptr = callee_frame;
 
-    // std.debug.print("invoking: callee = {} fp = {} sp = {} fi = {*} code = {*}\n", .{ callee, fp, sp, fi, callee_frame.code });
     next(bc.entry_pc, callee_frame.code, sp, stack);
 }
 
 fn ret(pc: usize, code: [*]const Word, fp: u64, stack: [*]Slot) void {
     const src = code[pc + 1].register;
-    // _ = src;
 
     // load the callee's frame to calculate the caller frame
     const callee_frame: [*]CallFrame = @ptrCast(@alignCast(slot(stack, fp, -1).ptr));
@@ -399,18 +396,6 @@ fn ret(pc: usize, code: [*]const Word, fp: u64, stack: [*]Slot) void {
     // and save the return value
     slot(stack, caller_frame.fp, @intCast(caller_frame.return_register)).int = slot(stack, fp, src).int;
 
-    // restore control flow to the caller code
-    // const rsp = fp - 5;
-    // const rpc: usize = @bitCast(stack[rsp + 0].int);
-    // const rfp: u64 = @bitCast(stack[rsp + 1].int);
-    // const rcode: [*]const Word = @ptrCast(@alignCast(stack[rsp + 2].ptr));
-    // const dst: u64 = @bitCast(stack[rsp + 3].int);
-    // stack[rfp + dst].int = slot(stack, fp, src).int;
-
-    // std.debug.print("interpreter ret\n", .{});
-    // std.debug.print("stack:\n", .{});
-    // for (fp..sp) |i| std.debug.print("x{} = {}\n", .{ i - fp, stack[i].int });
-    // std.debug.print("\n", .{});
     next(caller_frame.pc, caller_frame.code, caller_frame.fp, stack);
 }
 
