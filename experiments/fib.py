@@ -4,7 +4,7 @@ def fib(n: int):
     else:
         return fib(n - 1) + fib(n - 2)
 
-fib(32)
+print(fib(32))
 
 # foo = 1
 # def main():
