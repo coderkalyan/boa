@@ -4,9 +4,9 @@ const parse = @import("parse.zig");
 const InternPool = @import("InternPool.zig");
 const Scope = @import("ir/Scope.zig");
 const IrGen = @import("ir/IrGen.zig");
-// const ShapePool = @import("rt/ShapePool.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
 const Shape = @import("rt/Shape.zig");
+const GarbageCollector = @import("rt/GarbageCollector.zig");
 
 comptime {
     _ = lex;
@@ -14,7 +14,7 @@ comptime {
     _ = InternPool;
     _ = Scope;
     _ = IrGen;
-    // _ = ShapePool;
     _ = PageBumpAllocator;
     _ = Shape;
+    _ = GarbageCollector;
 }
