@@ -25,6 +25,7 @@ write_ptr: [*]u64,
 push_fn: PushFn,
 // opaque user data passed to the push function
 user_context: ?*anyopaque,
+scavenge_cycles: u32,
 
 pub const Queue = std.ArrayList(**align(stride) anyopaque);
 // when mode is .root, object_ptr and len are undefined and should not be used
@@ -73,6 +74,7 @@ pub fn init(gpa: Allocator, push_fn: PushFn, user_context: ?*anyopaque) !Garbage
         .write_ptr = a_space.ptr,
         .push_fn = push_fn,
         .user_context = user_context,
+        .scavenge_cycles = 0,
     };
 }
 
@@ -118,7 +120,7 @@ pub fn scavenge(gc: *GarbageCollector) Allocator.Error!void {
         const header = header_ptr.*;
         const object_len = header >> 32;
         const object_align = (header >> 24) & 0xff;
-        const object_moved = (header & 0xff) == 1;
+        const object_moved = (header & 0x01) == 1;
         if (!object_moved) {
             // first time seeing the object, so move it
             write_ptr += @sizeOf(u64);
@@ -132,12 +134,12 @@ pub fn scavenge(gc: *GarbageCollector) Allocator.Error!void {
             @memcpy(dest[0..object_len], src[0..object_len]);
 
             // update its forwarding pointer
-            header_ptr.* = @intFromPtr(write_ptr);
+            header_ptr.* = @intFromPtr(write_ptr) | 0x1;
             write_ptr += object_len;
         }
 
         // unconditionally update the object_ref pointer using the forwarding pointer
-        object_ref.* = @ptrFromInt(header_ptr.*);
+        object_ref.* = @ptrFromInt(header_ptr.* & ~@as(u64, 0x1));
     }
 
     // align the write_ptr up to stride
@@ -151,6 +153,9 @@ pub fn scavenge(gc: *GarbageCollector) Allocator.Error!void {
     gc.to_space = gc.from_space;
     gc.from_space = to_space;
     gc.write_ptr = @ptrCast(@alignCast(write_ptr));
+
+    const scavenge_cycles = @addWithOverflow(gc.scavenge_cycles, 1);
+    gc.scavenge_cycles = scavenge_cycles[0];
 }
 
 fn alloc(ctx: *anyopaque, len: usize, obj_align: u8, ret_addr: usize) ?[*]u8 {
@@ -244,7 +249,7 @@ test "basic alloc" {
 }
 
 const TestStack = std.SegmentedList(*align(@alignOf(u64)) anyopaque, 4);
-fn pushFn(queue: *std.ArrayList(**align(@alignOf(u64)) anyopaque), data: PushData) Allocator.Error!void {
+fn pushFn(queue: *Queue, data: PushData) Allocator.Error!void {
     switch (data) {
         .root => |root| {
             const stack: *TestStack = @ptrCast(@alignCast(root.ctx));
@@ -304,4 +309,19 @@ test "stack scavenge" {
     var alloc_len: u64 = 8 + @sizeOf(String) + hello_world_ptr.len;
     alloc_len = (alloc_len + stride - 1) & ~(@as(u64, stride) - 1);
     try std.testing.expectEqual(alloc_len, @intFromPtr(gc.write_ptr) - @intFromPtr(gc.from_space.ptr));
+
+    // throw out existing stuff, and create two references to a single new object
+    stack.clearRetainingCapacity();
+    const duplicate = try String.init(gca, "duplicate");
+    try stack.append(gpa, @constCast(@ptrCast(@alignCast(duplicate))));
+    try stack.append(gpa, @constCast(@ptrCast(@alignCast(duplicate))));
+
+    // run another GC cycle, and make sure both references are alive
+    try gc.scavenge();
+    const dup1: *const String = @ptrCast(@alignCast(stack.at(0).*));
+    const dup2: *const String = @ptrCast(@alignCast(stack.at(1).*));
+    try std.testing.expectEqual("duplicate".len, dup1.len);
+    try std.testing.expectEqualSlices(u8, "duplicate", dup1.bytes());
+    try std.testing.expectEqual("duplicate".len, dup2.len);
+    try std.testing.expectEqualSlices(u8, "duplicate", dup2.bytes());
 }
