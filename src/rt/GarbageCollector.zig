@@ -108,7 +108,6 @@ pub fn scavenge(gc: *GarbageCollector) Allocator.Error!void {
     var queue = Queue.init(gc.arena.allocator());
 
     var write_ptr: [*]u8 = @ptrCast(gc.to_space.ptr);
-    std.debug.print("scavenge write ptr: {x}\n", .{@intFromPtr(write_ptr)});
     try gc.push_fn(&queue, .{ .root = .{ .ctx = gc.user_context } });
     while (queue.popOrNull()) |object_ref| {
         // because this is a moving GC, we receive a pointer to the pointer (to the object)
@@ -124,22 +123,16 @@ pub fn scavenge(gc: *GarbageCollector) Allocator.Error!void {
             // first time seeing the object, so move it
             write_ptr += @sizeOf(u64);
             const align_mask = object_align - 1;
-            std.debug.print("object align: {}\n", .{object_align});
-            std.debug.print("write ptr header: {x}\n", .{@intFromPtr(write_ptr)});
             write_ptr = @ptrFromInt((@intFromPtr(write_ptr) + align_mask) & ~align_mask);
-            std.debug.print("write ptr header + aligned: {x}\n", .{@intFromPtr(write_ptr)});
 
             // std.debug.print("{*}\n", .{(@as([*]u64, @ptrCast(write_ptr)) - 1)});
             (@as([*]u64, @ptrCast(@alignCast(write_ptr))) - 1)[0] = header;
             const src: [*]align(stride) const u8 = @ptrCast(object_ptr);
             const dest: [*]align(stride) u8 = @ptrCast(@alignCast(write_ptr));
             @memcpy(dest[0..object_len], src[0..object_len]);
-            std.debug.print("{x} {x}\n", .{ dest[0], src[0] });
 
             // update its forwarding pointer
             header_ptr.* = @intFromPtr(write_ptr);
-            std.debug.print("forwarding: {x} -> {x}\n", .{ @intFromPtr(object_ptr), @intFromPtr(write_ptr) });
-            std.debug.print("write ptr: {x}\n", .{@intFromPtr(write_ptr)});
             write_ptr += object_len;
         }
 
@@ -289,11 +282,8 @@ test "stack scavenge" {
     try gc.scavenge();
     const hello_ptr: *const String = @ptrCast(@alignCast(stack.at(0).*));
     const world_ptr: *const String = @ptrCast(@alignCast(stack.at(1).*));
-    std.debug.print("hello_ptr: {x}\n", .{@intFromPtr(hello_ptr)});
-    std.debug.print("world_ptr: {x}\n", .{@intFromPtr(world_ptr)});
     try std.testing.expectEqual("Hello, ".len, hello_ptr.len);
     try std.testing.expectEqualSlices(u8, "Hello, ", hello_ptr.bytes());
-    std.debug.print("world: {x}\n", .{world_ptr.len});
     try std.testing.expectEqual("world!".len, world_ptr.len);
     try std.testing.expectEqualSlices(u8, "world!", world_ptr.bytes());
 
