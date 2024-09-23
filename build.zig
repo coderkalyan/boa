@@ -29,6 +29,21 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    const interpreter = b.addExecutable(.{
+        .name = "interpreter",
+        .root_source_file = b.path("src/interpreter/generator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    interpreter.linkLibC();
+    interpreter.linkSystemLibrary("LLVM-18");
+
+    // This declares intent for the executable to be installed into the
+    // standard location when the user invokes the "install" step (the default
+    // step when running `zig build`).
+    b.installArtifact(interpreter);
+
     const exe = b.addExecutable(.{
         .name = "boa",
         .root_source_file = b.path("src/main.zig"),
