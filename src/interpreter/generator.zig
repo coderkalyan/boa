@@ -8,6 +8,9 @@ const c = @cImport({
     @cInclude("llvm-c/Target.h");
 });
 
+const Allocator = std.mem.Allocator;
+const Error = Allocator.Error | Generator.Error;
+
 const Generator = struct {
     context: Context,
     module: Module,
@@ -20,6 +23,8 @@ const Generator = struct {
     usize_type: Type,
     // type of opaque pointer
     ptr_type: Type,
+    // type of f64 (double precision float)
+    f64_type: Type,
     // type of bytecode handler function
     handler_type: Type,
 
@@ -32,6 +37,11 @@ const Generator = struct {
     const Target = c.LLVMTargetRef;
     const TargetMachine = c.LLVMTargetMachineRef;
     const TargetData = c.LLVMTargetDataRef;
+    const HandlerGeneratorFn = *const fn (self: *Generator) Generator.Error!Value;
+    const Error = error{
+        WriteBitcodeFailed,
+        VerifyIrFailed,
+    };
 
     const address_space = 0;
     const ip_param_index = 0;
@@ -53,6 +63,7 @@ const Generator = struct {
         const word_type = c.LLVMInt32TypeInContext(context);
         const usize_type = c.LLVMIntPtrTypeInContext(context, target_data);
         const ptr_type = c.LLVMPointerTypeInContext(context, address_space);
+        const f64_type = c.LLVMDoubleTypeInContext(context);
         const handler_type = handlerType(context);
 
         return .{
@@ -64,6 +75,7 @@ const Generator = struct {
             .word_type = word_type,
             .usize_type = usize_type,
             .ptr_type = ptr_type,
+            .f64_type = f64_type,
             .handler_type = handler_type,
         };
     }
@@ -126,7 +138,7 @@ const Generator = struct {
 
         // set the function to internal for optimization
         // c.LLVMSetLinkage(handler, c.LLVMInternalLinkage);
-        // c.LLVMSetUnnamedAddress(handler, c.LLVMLocalUnnamedAddr);
+        c.LLVMSetUnnamedAddress(handler, c.LLVMLocalUnnamedAddr);
 
         // and set its calling convention to GHC to avoid callee saved registers
         c.LLVMSetFunctionCallConv(handler, c.LLVMGHCCallConv);
@@ -146,32 +158,139 @@ const Generator = struct {
     }
 
     pub fn generate(self: *Generator) !void {
-        self.declareJumpTable(2);
-        try self.generateLdHandler();
-        try self.generateIaddHandler();
-        self.defineJumpTable();
+        const generators = .{
+            HandlerGenerator("ld", 3, ld),
+            HandlerGenerator("mov", 3, mov),
+            HandlerGenerator("itof", 3, itof),
+            HandlerGenerator("ineg", 3, ineg),
+            HandlerGenerator("iadd", 4, BinaryIntHandler(c.LLVMAdd)),
+            HandlerGenerator("fadd", 4, BinaryFloatHandler(c.LLVMFAdd)),
+            HandlerGenerator("isub", 4, BinaryIntHandler(c.LLVMSub)),
+            HandlerGenerator("fsub", 4, BinaryFloatHandler(c.LLVMFSub)),
+            HandlerGenerator("imul", 4, BinaryIntHandler(c.LLVMMul)),
+            HandlerGenerator("fmul", 4, BinaryFloatHandler(c.LLVMFMul)),
+            HandlerGenerator("idiv", 4, BinaryIntHandler(c.LLVMSDiv)),
+            HandlerGenerator("fdiv", 4, BinaryFloatHandler(c.LLVMFDiv)),
+            HandlerGenerator("imod", 4, BinaryIntHandler(c.LLVMSRem)),
+            HandlerGenerator("fmod", 4, BinaryFloatHandler(c.LLVMFRem)),
+            HandlerGenerator("bor", 4, BinaryIntHandler(c.LLVMOr)),
+            HandlerGenerator("band", 4, BinaryIntHandler(c.LLVMAnd)),
+            HandlerGenerator("bxor", 4, BinaryIntHandler(c.LLVMXor)),
+            HandlerGenerator("sll", 4, BinaryIntHandler(c.LLVMShl)),
+            HandlerGenerator("sra", 4, BinaryIntHandler(c.LLVMAShr)),
+            HandlerGenerator("sra", 4, BinaryIntHandler(c.LLVMAShr)),
+            HandlerGenerator("ieq", 4, BinaryIntCompareHandler(c.LLVMIntEQ)),
+            HandlerGenerator("ine", 4, BinaryIntCompareHandler(c.LLVMIntNE)),
+            HandlerGenerator("ilt", 4, BinaryIntCompareHandler(c.LLVMIntSLT)),
+            HandlerGenerator("flt", 4, BinaryFloatCompareHandler(c.LLVMRealOLT)),
+            HandlerGenerator("igt", 4, BinaryIntCompareHandler(c.LLVMIntSGT)),
+            HandlerGenerator("fgt", 4, BinaryFloatCompareHandler(c.LLVMRealOGT)),
+            HandlerGenerator("ile", 4, BinaryIntCompareHandler(c.LLVMIntSLE)),
+            HandlerGenerator("fle", 4, BinaryFloatCompareHandler(c.LLVMRealOLE)),
+            HandlerGenerator("ige", 4, BinaryIntCompareHandler(c.LLVMIntSGE)),
+            HandlerGenerator("fge", 4, BinaryFloatCompareHandler(c.LLVMRealOGE)),
+        };
+        self.declareJumpTable(generators.len);
+
+        var handlers: [generators.len]Value = undefined;
+        inline for (generators, 0..) |generator, i| {
+            handlers[i] = try generator(self);
+        }
+        self.defineJumpTable(&handlers);
     }
 
-    fn generateLdHandler(self: *Generator) !void {
-        const handler = try self.addHandler("ld", 2);
-        const entry = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry);
+    fn HandlerGenerator(
+        comptime name: [:0]const u8,
+        comptime words: u32,
+        comptime body: *const fn (self: *Generator) Generator.Error!void,
+    ) HandlerGeneratorFn {
+        return struct {
+            pub fn generator(self: *Generator) !Value {
+                const handler = try self.addHandler(name, words);
+                const entry = c.LLVMAppendBasicBlock(handler, "entry");
+                c.LLVMPositionBuilderAtEnd(self.builder, entry);
 
+                try @call(.always_inline, body, .{self});
+
+                self.tailCallHandler(words);
+                _ = c.LLVMBuildRetVoid(self.builder);
+                return handler;
+            }
+        }.generator;
+    }
+
+    fn ld(self: *Generator) !void {
         const immediate = self.readImmediate(2, "imm");
-        const dst = self.readRegister(1, "dst.reg");
-        self.storeStack(dst, immediate, "dst");
-
-        self.tailCallHandler(3);
-        _ = c.LLVMBuildRetVoid(self.builder);
+        self.storeRegister(1, immediate, "dst");
     }
 
-    fn generateIaddHandler(self: *Generator) !void {
-        const handler = try self.addHandler("iadd", 4);
-        const entry = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry);
+    fn mov(self: *Generator) !void {
+        const src = self.loadRegister(2, "src");
+        self.storeRegister(1, src, "dst");
+    }
 
-        _ = self.readImmediate(2, "imm");
-        _ = c.LLVMBuildRetVoid(self.builder);
+    fn itof(self: *Generator) !void {
+        const src = self.loadRegister(2, "src");
+        const conversion = c.LLVMBuildSIToFP(self.builder, src, self.f64_type, "itof");
+        const bitcast = c.LLVMBuildBitCast(self.builder, conversion, self.usize_type, "bitcast");
+        self.storeRegister(1, bitcast, "dst");
+    }
+
+    fn ineg(self: *Generator) !void {
+        const src = self.loadRegister(2, "src");
+        const neg = c.LLVMBuildNUWNeg(self.builder, src, "ineg");
+        self.storeRegister(1, neg, "dst");
+    }
+
+    fn BinaryIntHandler(comptime opcode: c.LLVMOpcode) *const fn (self: *Generator) Generator.Error!void {
+        return struct {
+            pub fn generator(self: *Generator) Generator.Error!void {
+                const src1 = self.loadRegister(2, "src1");
+                const src2 = self.loadRegister(3, "src2");
+                const op = c.LLVMBuildBinOp(self.builder, opcode, src1, src2, "binary");
+                self.storeRegister(1, op, "dst");
+            }
+        }.generator;
+    }
+
+    fn BinaryFloatHandler(comptime opcode: c.LLVMOpcode) *const fn (self: *Generator) Generator.Error!void {
+        return struct {
+            pub fn generator(self: *Generator) Generator.Error!void {
+                const src1_int = self.loadRegister(2, "src1.int");
+                const src1 = c.LLVMBuildBitCast(self.builder, src1_int, self.f64_type, "src1");
+                const src2_int = self.loadRegister(3, "src2.int");
+                const src2 = c.LLVMBuildBitCast(self.builder, src2_int, self.f64_type, "src2");
+                const op = c.LLVMBuildBinOp(self.builder, opcode, src1, src2, "binary");
+                const op_int = c.LLVMBuildBitCast(self.builder, op, self.usize_type, "binary.int");
+                self.storeRegister(1, op_int, "dst");
+            }
+        }.generator;
+    }
+
+    fn BinaryIntCompareHandler(comptime predicate: c.LLVMIntPredicate) *const fn (self: *Generator) Generator.Error!void {
+        return struct {
+            pub fn generator(self: *Generator) Generator.Error!void {
+                const src1 = self.loadRegister(2, "src1");
+                const src2 = self.loadRegister(3, "src2");
+                const op = c.LLVMBuildICmp(self.builder, predicate, src1, src2, "icmp");
+                const op_int = c.LLVMBuildZExt(self.builder, op, self.usize_type, "icmp.zext");
+                self.storeRegister(1, op_int, "dst");
+            }
+        }.generator;
+    }
+
+    fn BinaryFloatCompareHandler(comptime predicate: c.LLVMRealPredicate) *const fn (self: *Generator) Generator.Error!void {
+        return struct {
+            pub fn generator(self: *Generator) Generator.Error!void {
+                const src1_int = self.loadRegister(2, "src1.int");
+                const src1 = c.LLVMBuildBitCast(self.builder, src1_int, self.f64_type, "src1");
+                const src2_int = self.loadRegister(3, "src2.int");
+                const src2 = c.LLVMBuildBitCast(self.builder, src2_int, self.f64_type, "src2");
+                const op = c.LLVMBuildFCmp(self.builder, predicate, src1, src2, "fcmp");
+                const op_int = c.LLVMBuildZExt(self.builder, op, self.usize_type, "fcmp.zext");
+                self.storeRegister(1, op_int, "dst");
+            }
+        }.generator;
     }
 
     fn readImmediate(self: *Generator, offset: usize, comptime name: [:0]const u8) Value {
@@ -179,7 +298,7 @@ const Generator = struct {
         const function = c.LLVMGetBasicBlockParent(insert_block);
         const ip = c.LLVMGetParam(function, ip_param_index);
 
-        const offset_value = c.LLVMConstInt(self.usize_type, @intCast(offset), @intFromBool(true));
+        const offset_value = c.LLVMConstInt(self.word_type, @intCast(offset), @intFromBool(false));
         const gep = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&offset_value), 1, name ++ ".ptr");
         const load = c.LLVMBuildLoad2(self.builder, self.word_type, gep, name ++ ".word");
         const sext = c.LLVMBuildSExt(self.builder, load, self.usize_type, name);
@@ -192,7 +311,7 @@ const Generator = struct {
         const ip = c.LLVMGetParam(function, ip_param_index);
 
         // load the register index from code
-        const offset_value = c.LLVMConstInt(self.usize_type, @intCast(offset), @intFromBool(true));
+        const offset_value = c.LLVMConstInt(self.word_type, @intCast(offset), @intFromBool(false));
         const code_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&offset_value), 1, name ++ ".ptr");
         const register = c.LLVMBuildLoad2(self.builder, self.word_type, code_gep, name);
         return register;
@@ -206,6 +325,7 @@ const Generator = struct {
         // load data from stack using the register offset
         const stack_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, fp, @constCast(&register), 1, name ++ ".ptr");
         const value = c.LLVMBuildLoad2(self.builder, self.usize_type, stack_gep, name);
+        c.LLVMSetAlignment(value, @alignOf(u64));
         return value;
     }
 
@@ -216,7 +336,19 @@ const Generator = struct {
 
         // load data from stack using the register offset
         const stack_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, fp, @constCast(&register), 1, name ++ ".ptr");
-        _ = c.LLVMBuildStore(self.builder, value, stack_gep);
+        const store = c.LLVMBuildStore(self.builder, value, stack_gep);
+        c.LLVMSetAlignment(store, @alignOf(u64));
+    }
+
+    fn loadRegister(self: *Generator, comptime offset: u32, comptime name: [:0]const u8) Value {
+        const register = self.readRegister(offset, name ++ ".reg");
+        const value = self.loadStack(register, name);
+        return value;
+    }
+
+    fn storeRegister(self: *Generator, comptime offset: u32, value: Value, comptime name: [:0]const u8) void {
+        const register = self.readRegister(offset, name ++ ".reg");
+        self.storeStack(register, value, name);
     }
 
     fn declareJumpTable(self: *Generator, count: u32) void {
@@ -226,12 +358,8 @@ const Generator = struct {
         c.LLVMSetUnnamedAddress(jump_table, c.LLVMLocalUnnamedAddr);
     }
 
-    fn defineJumpTable(self: *Generator) void {
+    fn defineJumpTable(self: *Generator, handlers: []const Value) void {
         const jump_table = c.LLVMGetNamedGlobal(self.module, "jump_table");
-        const handlers: []const Value = &.{
-            c.LLVMGetNamedFunction(self.module, "ld"),
-            c.LLVMGetNamedFunction(self.module, "iadd"),
-        };
         const pointers = c.LLVMConstArray2(self.ptr_type, @constCast(handlers.ptr), @intCast(handlers.len));
         c.LLVMSetInitializer(jump_table, pointers);
     }
