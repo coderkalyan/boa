@@ -22,6 +22,8 @@ const max_file_size = std.math.maxInt(u32);
 const value_stack_size = 8 * 1024 * 1024;
 const call_stack_size = 1 * 1024 * 1024;
 
+extern fn interpreter_entry(ip: [*]const u32, fp: [*]u64) callconv(.C) void;
+
 pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
     var file = try std.fs.cwd().openFile(input_filename, .{});
     defer file.close();
@@ -148,13 +150,23 @@ pub fn interpret(
             .{ .imm = @truncate(pool_ptr >> 32) },
             .{ .imm = @truncate(ptr) }, // constant array
             .{ .imm = @truncate(ptr >> 32) },
-            .{ .opcode = .ldi }, // ldi x0, constants[0]
+            .{ .opcode = .ld },
             .{ .register = 0 },
-            .{ .count = 0 },
-            .{ .opcode = .call }, // call x0, x0
+            .{ .imm = 100 },
+            .{ .opcode = .ld },
+            .{ .register = 1 },
+            .{ .imm = 200 },
+            .{ .opcode = .iadd },
             .{ .register = 0 },
             .{ .register = 0 },
-            .{ .count = 0 },
+            .{ .register = 1 },
+            // .{ .opcode = .ldi }, // ldi x0, constants[0]
+            // .{ .register = 0 },
+            // .{ .count = 0 },
+            // .{ .opcode = .call }, // call x0, x0
+            // .{ .register = 0 },
+            // .{ .register = 0 },
+            // .{ .count = 0 },
             .{ .opcode = .exit },
         },
         .entry_pc = 2,
@@ -189,6 +201,9 @@ pub fn interpret(
 
     stack[fp].ptr = &call_stack.ptr[0];
     fp += 1;
+    stack[fp].int = 0;
 
-    Interpreter.entry(4, entry_bc.code.ptr, fp, stack);
+    // Interpreter.entry(4, entry_bc.code.ptr, fp, stack);
+    interpreter_entry(@ptrCast(entry_bc.code.ptr + 4), @ptrCast(stack + fp));
+    std.debug.print("{}\n", .{stack[fp].int});
 }

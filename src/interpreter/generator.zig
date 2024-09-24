@@ -115,11 +115,11 @@ const Generator = struct {
         return function_type;
     }
 
-    fn addHandler(self: *Generator, name: [:0]const u8, words: u32) !Value {
+    fn addHandler(self: *Generator, comptime name: [:0]const u8, words: u32) !Value {
         // start by creating the base handler declaration
         const handler = c.LLVMAddFunction(
             self.module,
-            name,
+            "interpreter_" ++ name,
             self.handler_type,
         );
 
@@ -141,7 +141,7 @@ const Generator = struct {
         c.LLVMSetParamAlignment(fp_param, 8);
 
         // set the function to internal for optimization
-        // c.LLVMSetLinkage(handler, c.LLVMInternalLinkage);
+        c.LLVMSetLinkage(handler, c.LLVMInternalLinkage);
         c.LLVMSetUnnamedAddress(handler, c.LLVMLocalUnnamedAddr);
 
         // and set its calling convention to GHC to avoid callee saved registers
@@ -164,9 +164,9 @@ const Generator = struct {
     pub fn generate(self: *Generator) !void {
         const generators = .{
             HandlerGenerator("ld", 3, ld),
-            // TODO: ldi
-            // TODO: ldg
-            // TODO: stg
+            exit, // TODO: ldi
+            exit, // TODO: ldg
+            exit, // TODO: stg
             HandlerGenerator("mov", 3, mov),
             HandlerGenerator("itof", 3, itof),
             HandlerGenerator("ftoi", 3, ftoi),
@@ -184,6 +184,8 @@ const Generator = struct {
             HandlerGenerator("fdiv", 4, BinaryFloatHandler(c.LLVMFDiv)),
             HandlerGenerator("imod", 4, BinaryIntHandler(c.LLVMSRem)),
             HandlerGenerator("fmod", 4, BinaryFloatHandler(c.LLVMFRem)),
+            exit, // ipow
+            exit, // fpow
             HandlerGenerator("bor", 4, BinaryIntHandler(c.LLVMOr)),
             HandlerGenerator("band", 4, BinaryIntHandler(c.LLVMAnd)),
             HandlerGenerator("bxor", 4, BinaryIntHandler(c.LLVMXor)),
@@ -199,17 +201,17 @@ const Generator = struct {
             HandlerGenerator("fle", 4, BinaryFloatCompareHandler(c.LLVMRealOLE)),
             HandlerGenerator("ige", 4, BinaryIntCompareHandler(c.LLVMIntSGE)),
             HandlerGenerator("fge", 4, BinaryFloatCompareHandler(c.LLVMRealOGE)),
-            // TODO: call
-            // TODO: pint
-            // TODO: pfloat
-            // TODO: pbool
-            // TODO: pstr
-            // TODO: strlen
-            // TODO: strcat
-            // TODO: strrep
+            call,
+            exit, // TODO: pint
+            exit, // TODO: pfloat
+            exit, // TODO: pbool
+            exit, // TODO: pstr
+            exit, // TODO: strlen
+            exit, // TODO: strcat
+            exit, // TODO: strrep
             br,
             jmp,
-            // TODO: ret
+            exit, // TODO: ret
             exit,
         };
         self.declareJumpTable(generators.len);
@@ -219,6 +221,8 @@ const Generator = struct {
             handlers[i] = try generator(self);
         }
         self.defineJumpTable(&handlers);
+
+        _ = try self.entry();
     }
 
     fn HandlerGenerator(
@@ -229,8 +233,8 @@ const Generator = struct {
         return struct {
             pub fn generator(self: *Generator) !Value {
                 const handler = try self.addHandler(name, words);
-                const entry = c.LLVMAppendBasicBlock(handler, "entry");
-                c.LLVMPositionBuilderAtEnd(self.builder, entry);
+                const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+                c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
 
                 try @call(.always_inline, body, .{self});
 
@@ -239,6 +243,23 @@ const Generator = struct {
                 return handler;
             }
         }.generator;
+    }
+
+    fn entry(self: *Generator) !Value {
+        const handler = try self.addHandler("entry", 1);
+        c.LLVMSetFunctionCallConv(handler, c.LLVMCCallConv);
+        c.LLVMSetLinkage(handler, c.LLVMExternalLinkage);
+        c.LLVMSetUnnamedAddr(handler, @intFromBool(false));
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+
+        // don't actually tail call, since this is a different calling convention
+        self.tailCallNext(0);
+        const tail_call = c.LLVMGetLastInstruction(entry_block);
+        c.LLVMSetTailCallKind(tail_call, c.LLVMTailCallKindNone);
+
+        _ = c.LLVMBuildRetVoid(self.builder);
+        return handler;
     }
 
     fn ld(self: *Generator) !void {
@@ -347,8 +368,8 @@ const Generator = struct {
 
     pub fn br(self: *Generator) !Value {
         const handler = try self.addHandler("br", 3);
-        const entry = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
 
         const predicate_int = self.loadRegister(1, "predicate.int");
         const predicate = c.LLVMBuildTruncOrBitCast(self.builder, predicate_int, self.bool_type, "predicate");
@@ -371,8 +392,8 @@ const Generator = struct {
 
     pub fn jmp(self: *Generator) !Value {
         const handler = try self.addHandler("jmp", 2);
-        const entry = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
 
         const target = self.loadRegister(2, "target");
         self.tailCallTarget(target);
@@ -381,10 +402,34 @@ const Generator = struct {
         return handler;
     }
 
+    pub fn call(self: *Generator) !Value {
+        const handler = try self.addHandler("call", 3);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+
+        const predicate_int = self.loadRegister(1, "predicate.int");
+        const predicate = c.LLVMBuildTruncOrBitCast(self.builder, predicate_int, self.bool_type, "predicate");
+
+        const taken = c.LLVMAppendBasicBlock(handler, "taken");
+        const skipped = c.LLVMAppendBasicBlock(handler, "skipped");
+        _ = c.LLVMBuildCondBr(self.builder, predicate, taken, skipped);
+
+        c.LLVMPositionBuilderAtEnd(self.builder, taken);
+        const target = self.loadRegister(2, "target");
+        self.tailCallTarget(target);
+        _ = c.LLVMBuildRetVoid(self.builder);
+
+        c.LLVMPositionBuilderAtEnd(self.builder, skipped);
+        self.tailCallNext(3);
+        _ = c.LLVMBuildRetVoid(self.builder);
+
+        return handler;
+    }
+
     pub fn exit(self: *Generator) !Value {
         const handler = try self.addHandler("exit", 1);
-        const entry = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
         _ = c.LLVMBuildRetVoid(self.builder);
         return handler;
     }
@@ -478,9 +523,9 @@ const Generator = struct {
 
         // tail call the handler
         const args: []const Value = &.{ next_ip, fp };
-        const call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
-        c.LLVMSetTailCallKind(call, c.LLVMTailCallKindMustTail);
-        c.LLVMSetInstructionCallConv(call, c.LLVMGHCCallConv);
+        const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);
     }
 
     fn tailCallNext(self: *Generator, offset: u32) void {
@@ -497,14 +542,14 @@ const Generator = struct {
 
         // load the handler pointer from the jump table using the opcode
         const jump_table = c.LLVMGetNamedGlobal(self.module, "jump_table");
-        const handler_ptr = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, jump_table, @constCast(&next_opcode), 1, "handler.ptr");
+        const handler_ptr = c.LLVMBuildInBoundsGEP2(self.builder, self.ptr_type, jump_table, @constCast(&next_opcode), 1, "handler.ptr");
         const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
 
         // tail call the handler
         const args: []const Value = &.{ next_ip, fp };
-        const call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
-        c.LLVMSetTailCallKind(call, c.LLVMTailCallKindMustTail);
-        c.LLVMSetInstructionCallConv(call, c.LLVMGHCCallConv);
+        const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);
     }
 
     pub fn finalize(self: *Generator, bc_name: [:0]const u8) !void {
