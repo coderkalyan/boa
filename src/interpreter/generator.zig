@@ -527,7 +527,11 @@ const Generator = struct {
 };
 
 pub fn main() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const args = try std.process.argsAlloc(arena.allocator());
+
     var generator = try Generator.init("interpreter");
     try generator.generate();
-    try generator.finalize("interpreter.bc");
+    try generator.finalize(args[1]);
 }

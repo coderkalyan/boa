@@ -15,34 +15,34 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "boa",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
-
-    const interpreter = b.addExecutable(.{
-        .name = "interpreter",
+    // The interpreter is generated at build time using a Zig program that
+    // uses LLVM to emit efficient bytecode handlers.
+    const interpreter_generator = b.addExecutable(.{
+        .name = "interpreter-generator",
         .root_source_file = b.path("src/interpreter/generator.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    interpreter.linkLibC();
-    interpreter.linkSystemLibrary("LLVM-18");
+    // The generator depends on libc and LLVM.
+    interpreter_generator.linkLibC();
+    interpreter_generator.linkSystemLibrary("LLVM-18");
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(interpreter);
+    // Run the generator and capture its output LLVM bitcode.
+    const generator_step = b.addRunArtifact(interpreter_generator);
+    const interpreter_bc = generator_step.addOutputFileArg("interpreter.bc");
+
+    // Run the bitcode through the standard optimizer.
+    const opt_run = b.addSystemCommand(&.{"opt"});
+    opt_run.addFileArg(interpreter_bc);
+    opt_run.addArg("-o");
+    const opt_bc = opt_run.addOutputFileArg("interpreter-opt.bc");
+
+    // Compile the bitcode into assembly for the target platform.
+    const llc_run = b.addSystemCommand(&.{"llc"});
+    llc_run.addFileArg(opt_bc);
+    llc_run.addArg("-o");
+    const interpreter_s = llc_run.addOutputFileArg("interpreter.s");
 
     const exe = b.addExecutable(.{
         .name = "boa",
@@ -50,6 +50,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Add the generated interpreter to the executable source.
+    exe.addAssemblyFile(interpreter_s);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -59,7 +62,7 @@ pub fn build(b: *std.Build) void {
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
     // such a dependency.
-    const run_cmd = b.addRunArtifact(interpreter);
+    const run_cmd = b.addRunArtifact(exe);
 
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
@@ -79,18 +82,8 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
     const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -101,6 +94,5 @@ pub fn build(b: *std.Build) void {
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
 }
