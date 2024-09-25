@@ -41,6 +41,7 @@ pub const FunctionIndex = enum(u32) { _ };
 
 pub const FunctionInfo = struct {
     magic: u64 = 0xcafeb0bacafeb0ba,
+    intern_pool: *InternPool,
     tree: *const Ast,
     node: Ast.Node.Index,
     lazy_ir: ?IrIndex,

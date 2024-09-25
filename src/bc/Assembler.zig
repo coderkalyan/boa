@@ -85,8 +85,8 @@ pub fn assemble(
         .{ .imm = @truncate(pool_ptr >> 32) },
     });
 
-    _ = try assembler.code.addOne(assembler.gpa);
-    _ = try assembler.code.addOne(assembler.gpa);
+    // _ = try assembler.code.addOne(assembler.gpa);
+    // _ = try assembler.code.addOne(assembler.gpa);
 
     for (0..prepass.order.len) |i| {
         const current = prepass.order[i];
@@ -95,10 +95,10 @@ pub fn assemble(
     }
 
     const entry_pc: usize = 4;
-    const constants = try assembler.constants.toOwnedSlice(assembler.gpa);
-    const ptr: usize = @intFromPtr(constants.ptr);
-    assembler.code.items[2] = .{ .imm = @truncate(ptr) };
-    assembler.code.items[3] = .{ .imm = @truncate(ptr >> 32) };
+    // const constants = try assembler.constants.toOwnedSlice(assembler.gpa);
+    // const ptr: usize = @intFromPtr(constants.ptr);
+    // assembler.code.items[2] = .{ .imm = @truncate(ptr) };
+    // assembler.code.items[3] = .{ .imm = @truncate(ptr >> 32) };
     // try assembler.code.ensureUnusedCapacity(assembler.gpa, assembler.constants.items.len * @sizeOf(usize) / @sizeOf(u32));
     // for (assembler.constants.items) |item| {
     //     const ptr = @intFromPtr(item);
@@ -343,10 +343,13 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
         gop.value_ptr.* = index;
     }
 
+    // TODO: clean this up
+    const ptr = @intFromPtr(self.constants.items[gop.value_ptr.*]);
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .ldi },
+        .{ .opcode = .ldw },
         .{ .register = dst },
-        .{ .count = gop.value_ptr.* },
+        .{ .imm = @truncate(ptr) },
+        .{ .imm = @truncate(ptr >> 32) },
     });
 }
 

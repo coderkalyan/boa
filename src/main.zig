@@ -13,6 +13,8 @@ const Object = @import("rt/object.zig").Object;
 const ShapePool = @import("rt/ShapePool.zig");
 const ConstantPool = @import("rt/ConstantPool.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
+// const builtins = @import("rt/builtins.zig");
+const builtins = @import("rt/builtins_impl.zig");
 
 const posix = std.posix;
 const Node = Ast.Node;
@@ -96,6 +98,7 @@ pub fn main() !void {
     // }
 
     const findex = try pool.createFunction(.{
+        .intern_pool = &pool,
         .tree = &tree,
         .node = module_node,
         .lazy_ir = ir_index,
@@ -139,34 +142,23 @@ pub fn interpret(
     );
 
     const pool_ptr: usize = @intFromPtr(pool);
-    const fi_ptr = pool.functionPtr(pool.get(fi_ip).function);
-    const constants: []const *anyopaque = &.{fi_ptr};
-    const ptr: usize = @intFromPtr(constants.ptr);
+    const fi_ptr = @intFromPtr(pool.functionPtr(pool.get(fi_ip).function));
     const entry_bc: Bytecode = .{
         .register_count = 0,
         .ic_count = 0,
         .code = &.{
             .{ .imm = @truncate(pool_ptr) }, // intern pool
             .{ .imm = @truncate(pool_ptr >> 32) },
-            .{ .imm = @truncate(ptr) }, // constant array
-            .{ .imm = @truncate(ptr >> 32) },
-            .{ .opcode = .ld },
+            .{ .opcode = .ldw }, // ldw x0, fi_ptr
             .{ .register = 0 },
-            .{ .imm = 100 },
-            .{ .opcode = .ld },
-            .{ .register = 1 },
-            .{ .imm = 200 },
-            .{ .opcode = .iadd },
+            .{ .imm = @truncate(fi_ptr) },
+            .{ .imm = @truncate(fi_ptr >> 32) },
+            // .{ .opcode = .callrt0 },
+            // .{ .imm = 0 },
+            .{ .opcode = .call }, // call x0, x0
             .{ .register = 0 },
             .{ .register = 0 },
-            .{ .register = 1 },
-            // .{ .opcode = .ldi }, // ldi x0, constants[0]
-            // .{ .register = 0 },
-            // .{ .count = 0 },
-            // .{ .opcode = .call }, // call x0, x0
-            // .{ .register = 0 },
-            // .{ .register = 0 },
-            // .{ .count = 0 },
+            .{ .count = 0 },
             .{ .opcode = .exit },
         },
         .entry_pc = 2,
@@ -203,7 +195,14 @@ pub fn interpret(
     fp += 1;
     stack[fp].int = 0;
 
-    // Interpreter.entry(4, entry_bc.code.ptr, fp, stack);
-    interpreter_entry(@ptrCast(entry_bc.code.ptr + 4), @ptrCast(stack + fp));
-    std.debug.print("{}\n", .{stack[fp].int});
+    interpreter_entry(@ptrCast(entry_bc.code.ptr + 2), @ptrCast(stack + fp));
+    std.debug.print("{x}\n", .{stack[fp].int});
+}
+
+// comptime {
+//     @export(builtins.rtHandler, .{ .name = "rt_handler", .linkage = .strong });
+// }
+comptime {
+    @export(builtins.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });
+    @export(builtins.evalCallable, .{ .name = "rt_eval_callable", .linkage = .strong });
 }

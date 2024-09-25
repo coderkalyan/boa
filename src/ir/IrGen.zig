@@ -999,6 +999,7 @@ fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     var return_type: InternPool.Index = .any;
     if (signature.ret != .null) return_type = try ig.typeExpr(scope, signature.ret);
     const findex = try ig.pool.createFunction(.{
+        .intern_pool = ig.pool,
         .tree = ig.tree,
         .node = node,
         .lazy_ir = null,

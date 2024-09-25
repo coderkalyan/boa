@@ -1,4 +1,5 @@
 const std = @import("std");
+const BuiltinIndex = @import("builtins.zig").BuiltinIndex;
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
     @cInclude("llvm-c/Error.h");
@@ -29,6 +30,8 @@ const Generator = struct {
     bool_type: Type,
     // type of bytecode handler function
     handler_type: Type,
+    // list of builtins
+    builtins: []const Builtin,
 
     const Context = c.LLVMContextRef;
     const Module = c.LLVMModuleRef;
@@ -40,6 +43,7 @@ const Generator = struct {
     const TargetMachine = c.LLVMTargetMachineRef;
     const TargetData = c.LLVMTargetDataRef;
     const HandlerGeneratorFn = *const fn (self: *Generator) Generator.Error!Value;
+    const Builtin = struct { ty: Type, ptr: Value };
     const Error = error{
         WriteBitcodeFailed,
         VerifyIrFailed,
@@ -48,8 +52,9 @@ const Generator = struct {
     const address_space = 0;
     const ip_param_index = 0;
     const fp_param_index = 1;
+    const sp_param_index = 2;
 
-    pub fn init(module_name: [:0]const u8) !Generator {
+    pub fn init(arena: Allocator, module_name: [:0]const u8) !Generator {
         if (c.LLVMInitializeNativeTarget() != 0) return error.TargetInitFailed;
 
         const context = c.LLVMContextCreate();
@@ -69,6 +74,8 @@ const Generator = struct {
         const bool_type = c.LLVMInt1TypeInContext(context);
         const handler_type = handlerType(context);
 
+        const builtins = try declareBuiltins(arena, context, module);
+
         return .{
             .context = context,
             .module = module,
@@ -81,6 +88,7 @@ const Generator = struct {
             .f64_type = f64_type,
             .bool_type = bool_type,
             .handler_type = handler_type,
+            .builtins = builtins,
         };
     }
 
@@ -97,11 +105,50 @@ const Generator = struct {
         return target;
     }
 
+    fn declareBuiltins(arena: Allocator, context: Context, module: Module) ![]const Builtin {
+        const ptr_type = c.LLVMPointerTypeInContext(context, address_space);
+        // const u32_type = c.LLVMInt32TypeInContext(context);
+        const u64_type = c.LLVMInt64TypeInContext(context);
+        const void_type = c.LLVMVoidTypeInContext(context);
+
+        var builtins = std.ArrayList(Builtin).init(arena);
+        const tvs = &.{
+            .{ .push_args, .{ ptr_type, u64_type, ptr_type, ptr_type }, void_type },
+            .{ .eval_callable, .{ ptr_type, ptr_type }, ptr_type },
+        };
+        try builtins.ensureTotalCapacity(tvs.len);
+        inline for (comptime std.meta.tags(BuiltinIndex), tvs) |tag, tv| {
+            std.debug.assert(tag == tv[0]);
+            const ty = functionType(&tv[1], tv[2]);
+            builtins.appendAssumeCapacity(.{
+                .ty = ty,
+                .ptr = c.LLVMAddFunction(module, "rt_" ++ @tagName(tag), ty),
+            });
+        }
+
+        return builtins.toOwnedSlice();
+    }
+
+    fn builtinDecl(self: *Generator, comptime index: BuiltinIndex) Builtin {
+        return self.builtins[@intFromEnum(index)];
+    }
+
+    fn functionType(parameter_types: []const Type, return_type: Type) Type {
+        return c.LLVMFunctionType(
+            return_type,
+            @constCast(parameter_types.ptr),
+            @intCast(parameter_types.len),
+            0,
+        );
+    }
+
     fn handlerType(context: Context) Type {
         const parameter_types: []const Type = &.{
             // instruction pointer to the current instruction
             c.LLVMPointerTypeInContext(context, address_space),
             // frame pointer to the base of the current stack frame
+            c.LLVMPointerTypeInContext(context, address_space),
+            // stack pointer to the top of the current stack frame
             c.LLVMPointerTypeInContext(context, address_space),
         };
         const return_type = c.LLVMVoidTypeInContext(context);
@@ -135,10 +182,15 @@ const Generator = struct {
         const deref_bytes = words * c.LLVMABISizeOfType(self.target_data, self.ptr_type);
         c.LLVMAddAttributeAtIndex(handler, ip_param_index + 1, self.enumAttribute(deref, @intCast(deref_bytes)));
 
-        // stack pointer attributes: nonnull, align 8
+        // frame pointer attributes: nonnull, align 8
         const fp_param = c.LLVMGetParam(handler, fp_param_index);
         c.LLVMAddAttributeAtIndex(handler, fp_param_index + 1, self.enumAttribute(non_null, null));
         c.LLVMSetParamAlignment(fp_param, 8);
+
+        // stack pointer attributes: nonnull, align 8
+        const sp_param = c.LLVMGetParam(handler, sp_param_index);
+        c.LLVMAddAttributeAtIndex(handler, sp_param_index + 1, self.enumAttribute(non_null, null));
+        c.LLVMSetParamAlignment(sp_param, 8);
 
         // set the function to internal for optimization
         c.LLVMSetLinkage(handler, c.LLVMInternalLinkage);
@@ -164,7 +216,7 @@ const Generator = struct {
     pub fn generate(self: *Generator) !void {
         const generators = .{
             HandlerGenerator("ld", 3, ld),
-            exit, // TODO: ldi
+            HandlerGenerator("ldw", 4, ldw),
             exit, // TODO: ldg
             exit, // TODO: stg
             HandlerGenerator("mov", 3, mov),
@@ -202,6 +254,12 @@ const Generator = struct {
             HandlerGenerator("ige", 4, BinaryIntCompareHandler(c.LLVMIntSGE)),
             HandlerGenerator("fge", 4, BinaryFloatCompareHandler(c.LLVMRealOGE)),
             call,
+            exit,
+            exit,
+            exit,
+            // HandlerGenerator("callrt0", 2, callrt0),
+            // HandlerGenerator("callrt1", 2, callrt0),
+            // HandlerGenerator("callrt", 2, callrt0),
             exit, // TODO: pint
             exit, // TODO: pfloat
             exit, // TODO: pbool
@@ -215,6 +273,7 @@ const Generator = struct {
             exit,
         };
         self.declareJumpTable(generators.len);
+        self.declareRtHandler();
 
         var handlers: [generators.len]Value = undefined;
         inline for (generators, 0..) |generator, i| {
@@ -223,6 +282,7 @@ const Generator = struct {
         self.defineJumpTable(&handlers);
 
         _ = try self.entry();
+        _ = try self.trampoline();
     }
 
     fn HandlerGenerator(
@@ -262,8 +322,54 @@ const Generator = struct {
         return handler;
     }
 
+    fn trampoline(self: *Generator) !Value {
+        const function = try self.addHandler("trampoline", 1);
+        // this handler has to be visible externally so the runtime can
+        // point to it, but is otherwise the same
+        c.LLVMSetLinkage(function, c.LLVMExternalLinkage);
+        c.LLVMSetUnnamedAddr(function, @intFromBool(false));
+        const entry_block = c.LLVMAppendBasicBlock(function, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+
+        const fp = c.LLVMGetParam(function, fp_param_index);
+        var sp = c.LLVMGetParam(function, sp_param_index);
+
+        // the runtime will have pushed the bytecode head to the VM stack,
+        // so we can simply pop it and tail call the first opcode
+        const ip_int = self.pop(&sp);
+        const ip = c.LLVMBuildIntToPtr(self.builder, ip_int, self.ptr_type, "ip");
+        // and use it to read the opcode of the next instruction (to lookup the handler)
+        const next_opcode = c.LLVMBuildLoad2(self.builder, self.word_type, ip, "opcode.next");
+
+        // load the handler pointer from the jump table using the opcode
+        const jump_table = c.LLVMGetNamedGlobal(self.module, "jump_table");
+        const handler_ptr = c.LLVMBuildInBoundsGEP2(self.builder, self.ptr_type, jump_table, @constCast(&next_opcode), 1, "handler.ptr");
+        const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
+
+        // tail call the handler
+        const args: []const Value = &.{ ip, fp, sp };
+        const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);
+
+        _ = c.LLVMBuildRetVoid(self.builder);
+        return handler;
+    }
+
     fn ld(self: *Generator) !void {
         const immediate = self.readImmediate(2, "imm");
+        self.storeRegister(1, immediate, "dst");
+    }
+
+    fn ldw(self: *Generator) !void {
+        // read the lower and upper 4 byte chunks
+        const lower = self.readImmediateZ(2, "lower");
+        const upper = self.readImmediateZ(3, "upper");
+        // assemble the complete immediate
+        const four_bytes = c.LLVMConstInt(self.usize_type, 32, @intFromBool(false));
+        const shl = c.LLVMBuildBinOp(self.builder, c.LLVMShl, upper, four_bytes, "upper.sll");
+        const immediate = c.LLVMBuildBinOp(self.builder, c.LLVMOr, lower, shl, "imm");
+        // and store the assembled immediate on stack
         self.storeRegister(1, immediate, "dst");
     }
 
@@ -403,27 +509,60 @@ const Generator = struct {
     }
 
     pub fn call(self: *Generator) !Value {
-        const handler = try self.addHandler("call", 3);
+        const handler = try self.addHandler("call", 4);
         const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
         c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+        const ip = c.LLVMGetParam(handler, ip_param_index);
+        const fp = c.LLVMGetParam(handler, fp_param_index);
+        var sp = c.LLVMGetParam(handler, sp_param_index);
 
-        const predicate_int = self.loadRegister(1, "predicate.int");
-        const predicate = c.LLVMBuildTruncOrBitCast(self.builder, predicate_int, self.bool_type, "predicate");
+        // call the runtime to push arguments onto the stack
+        const arg_count = self.readImmediate(3, "arg.count");
+        const arg_offset = c.LLVMConstInt(self.usize_type, 4, @intFromBool(false));
+        const arg_start = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&arg_offset), 1, "arg.start");
+        self.callRuntimeVoid(.push_args, &.{ arg_start, arg_count, fp, sp });
 
-        const taken = c.LLVMAppendBasicBlock(handler, "taken");
-        const skipped = c.LLVMAppendBasicBlock(handler, "skipped");
-        _ = c.LLVMBuildCondBr(self.builder, predicate, taken, skipped);
+        // push saved ip, fp, and return register
+        const sip = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, arg_start, @constCast(&arg_count), 1, "sip");
+        const sfp = fp;
+        const return_reg = self.readRegister(2, "ret.reg");
+        self.push(&sp, sip);
+        self.push(&sp, sfp);
+        self.push(&sp, return_reg);
 
-        c.LLVMPositionBuilderAtEnd(self.builder, taken);
-        const target = self.loadRegister(2, "target");
-        self.tailCallTarget(target);
+        // call the runtime to evaluate the callable
+        const callable_int = self.loadRegister(1, "callable.int");
+        const callable = c.LLVMBuildIntToPtr(self.builder, callable_int, self.ptr_type, "callable");
+        const target = self.callRuntime(.eval_callable, &.{ callable, sp });
+        const one = c.LLVMConstInt(self.usize_type, 1, @intFromBool(false));
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&one), 1, "sp.next");
+
+        // tail call the target function
+        const poison = c.LLVMGetPoison(self.ptr_type);
+        const args: []const Value = &.{ poison, fp, sp };
+        const target_call = c.LLVMBuildCall2(self.builder, self.handler_type, target, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetTailCallKind(target_call, c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(target_call, c.LLVMGHCCallConv);
+
         _ = c.LLVMBuildRetVoid(self.builder);
-
-        c.LLVMPositionBuilderAtEnd(self.builder, skipped);
-        self.tailCallNext(3);
-        _ = c.LLVMBuildRetVoid(self.builder);
-
         return handler;
+    }
+
+    pub fn callrt0(self: *Generator) !void {
+        const insert_block = c.LLVMGetInsertBlock(self.builder);
+        const function = c.LLVMGetBasicBlockParent(insert_block);
+        const ip = c.LLVMGetParam(function, ip_param_index);
+        const fp = c.LLVMGetParam(function, fp_param_index);
+        var sp = c.LLVMGetParam(function, sp_param_index);
+
+        // push the builtin index so the handler knows which runtime function to dispatch
+        const index = self.readImmediate(1, "index");
+        self.push(&sp, index);
+
+        const rt_handler = c.LLVMGetNamedFunction(self.module, "rt_handler");
+        const args: []const Value = &.{ ip, fp, sp };
+        const builtin_call = c.LLVMBuildCall2(self.builder, self.handler_type, rt_handler, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetInstructionCallConv(builtin_call, c.LLVMCCallConv);
     }
 
     pub fn exit(self: *Generator) !Value {
@@ -444,6 +583,18 @@ const Generator = struct {
         const load = c.LLVMBuildLoad2(self.builder, self.word_type, gep, name ++ ".word");
         const sext = c.LLVMBuildSExt(self.builder, load, self.usize_type, name);
         return sext;
+    }
+
+    fn readImmediateZ(self: *Generator, offset: usize, comptime name: [:0]const u8) Value {
+        const insert_block = c.LLVMGetInsertBlock(self.builder);
+        const function = c.LLVMGetBasicBlockParent(insert_block);
+        const ip = c.LLVMGetParam(function, ip_param_index);
+
+        const offset_value = c.LLVMConstInt(self.word_type, @intCast(offset), @intFromBool(false));
+        const gep = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&offset_value), 1, name ++ ".ptr");
+        const load = c.LLVMBuildLoad2(self.builder, self.word_type, gep, name ++ ".word");
+        const zext = c.LLVMBuildZExt(self.builder, load, self.usize_type, name);
+        return zext;
     }
 
     fn readRegister(self: *Generator, offset: usize, comptime name: [:0]const u8) Value {
@@ -505,11 +656,17 @@ const Generator = struct {
         c.LLVMSetInitializer(jump_table, pointers);
     }
 
+    fn declareRtHandler(self: *Generator) void {
+        const handler = c.LLVMAddFunction(self.module, "rt_handler", self.handler_type);
+        c.LLVMSetLinkage(handler, c.LLVMExternalLinkage);
+    }
+
     fn tailCallTarget(self: *Generator, offset: Value) void {
         const insert_block = c.LLVMGetInsertBlock(self.builder);
         const function = c.LLVMGetBasicBlockParent(insert_block);
         const ip = c.LLVMGetParam(function, ip_param_index);
         const fp = c.LLVMGetParam(function, fp_param_index);
+        const sp = c.LLVMGetParam(function, sp_param_index);
 
         // load the pointer to the start of the next instruction (to pass into next handler)
         // and use it to read the opcode of the next instruction (to lookup the handler)
@@ -522,7 +679,7 @@ const Generator = struct {
         const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
 
         // tail call the handler
-        const args: []const Value = &.{ next_ip, fp };
+        const args: []const Value = &.{ next_ip, fp, sp };
         const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
         c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
         c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);
@@ -533,6 +690,7 @@ const Generator = struct {
         const function = c.LLVMGetBasicBlockParent(insert_block);
         const ip = c.LLVMGetParam(function, ip_param_index);
         const fp = c.LLVMGetParam(function, fp_param_index);
+        const sp = c.LLVMGetParam(function, sp_param_index);
 
         // load the pointer to the start of the next instruction (to pass into next handler)
         // and use it to read the opcode of the next instruction (to lookup the handler)
@@ -546,10 +704,79 @@ const Generator = struct {
         const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
 
         // tail call the handler
-        const args: []const Value = &.{ next_ip, fp };
+        const args: []const Value = &.{ next_ip, fp, sp };
         const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
         c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
         c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);
+    }
+
+    fn callRuntimeVoid(self: *Generator, comptime index: BuiltinIndex, arguments: []const Value) void {
+        const builtin = self.builtinDecl(index);
+        const runtime_call = c.LLVMBuildCall2(
+            self.builder,
+            builtin.ty,
+            builtin.ptr,
+            @constCast(arguments.ptr),
+            @intCast(arguments.len),
+            "",
+        );
+        c.LLVMSetInstructionCallConv(runtime_call, c.LLVMCCallConv);
+    }
+
+    fn callRuntime(self: *Generator, comptime index: BuiltinIndex, arguments: []const Value) Value {
+        const builtin = self.builtinDecl(index);
+        const runtime_call = c.LLVMBuildCall2(
+            self.builder,
+            builtin.ty,
+            builtin.ptr,
+            @constCast(arguments.ptr),
+            @intCast(arguments.len),
+            "rt",
+        );
+        c.LLVMSetInstructionCallConv(runtime_call, c.LLVMCCallConv);
+
+        return runtime_call;
+    }
+
+    // fn tailCallRuntime(self: *Generator, index: Value) void {
+    //     const insert_block = c.LLVMGetInsertBlock(self.builder);
+    //     const function = c.LLVMGetBasicBlockParent(insert_block);
+    //     const ip = c.LLVMGetParam(function, ip_param_index);
+    //     const fp = c.LLVMGetParam(function, fp_param_index);
+    //     const sp = c.LLVMGetParam(function, sp_param_index);
+    //
+    //     // load the pointer to the start of the next instruction (to pass into next handler)
+    //     // and use it to read the opcode of the next instruction (to lookup the handler)
+    //     const next_ip = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&offset), 1, "ip.next");
+    //     const next_opcode = c.LLVMBuildLoad2(self.builder, self.word_type, next_ip, "opcode.next");
+    //
+    //     // load the handler pointer from the jump table using the opcode
+    //     const jump_table = c.LLVMGetNamedGlobal(self.module, "jump_table");
+    //     const handler_ptr = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, jump_table, @constCast(&next_opcode), 1, "handler.ptr");
+    //     const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
+    //
+    //     // tail call the handler
+    //     const args: []const Value = &.{ next_ip, fp, sp };
+    //     const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
+    //     c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
+    //     c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);
+    // }
+
+    fn push(self: *Generator, sp_ptr: *Value, value: Value) void {
+        const sp = sp_ptr.*;
+        _ = c.LLVMBuildStore(self.builder, value, sp);
+        const one = c.LLVMConstInt(self.usize_type, 1, @intFromBool(false));
+        const next_sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&one), 1, "sp.next");
+        sp_ptr.* = next_sp;
+    }
+
+    fn pop(self: *Generator, sp_ptr: *Value) Value {
+        const sp = sp_ptr.*;
+        const minus_one = c.LLVMConstInt(self.usize_type, @bitCast(@as(i64, -1)), @intFromBool(true));
+        const prev_sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&minus_one), 1, "sp.prev");
+        const value = c.LLVMBuildLoad2(self.builder, self.usize_type, prev_sp, "pop");
+        sp_ptr.* = prev_sp;
+        return value;
     }
 
     pub fn finalize(self: *Generator, bc_name: [:0]const u8) !void {
@@ -576,7 +803,7 @@ pub fn main() !void {
     defer arena.deinit();
     const args = try std.process.argsAlloc(arena.allocator());
 
-    var generator = try Generator.init("interpreter");
+    var generator = try Generator.init(arena.allocator(), "interpreter");
     try generator.generate();
     try generator.finalize(args[1]);
 }

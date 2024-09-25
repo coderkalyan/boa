@@ -16,7 +16,8 @@ pub const Opcode = enum(u32) {
     ld,
     // load a constant pool entry into register
     // .wimm,
-    ldi,
+    // ldi,
+    ldw,
 
     // load the value of a global variable by identifier
     // .ip
@@ -106,6 +107,10 @@ pub const Opcode = enum(u32) {
 
     // function call
     call,
+    // runtime call
+    callrt0,
+    callrt1,
+    callrt,
 
     // print type
     pint,
