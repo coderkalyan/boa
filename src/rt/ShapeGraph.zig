@@ -5,10 +5,11 @@ const Allocator = std.mem.Allocator;
 const ShapePool = @This();
 
 gpa: Allocator,
-shapes: std.SegmentedList(Shape, 1),
+shapes: std.ArrayListUnmanaged(Shape),
 descriptor_sets: std.SegmentedList(DescriptorSet, 1),
 
 pub const Shape = struct {
+    pool: *ShapePool,
     descriptor_set: DescriptorSetIndex,
     descriptor_count: u32,
     transitions: std.ArrayListUnmanaged(Transition),
@@ -63,24 +64,6 @@ pub fn createShape(pool: *ShapePool) !ShapeIndex {
     });
     return @enumFromInt(index);
 }
-// pub fn createShape(pool: *ShapePool, descriptor_set: *const DescriptorSet) !ShapeIndex {
-//     const index: u32 = @intCast(pool.shapes.count());
-//     if (descriptor_set.items.len == 0) {
-//         try pool.shapes.append(pool.gpa, .{
-//             .descriptor_set = .empty,
-//             .descriptor_count = 0,
-//             .transitions = .{},
-//         });
-//     } else {
-//         try pool.shapes.append(pool.gpa, .{
-//             .descriptor_set = try descriptor_set.clone(pool.gpa),
-//             .descriptor_count = 0,
-//             .transitions = .{},
-//         });
-//     }
-//
-//     return @enumFromInt(index);
-// }
 
 pub fn shapePtr(pool: *ShapePool, index: ShapeIndex) *Shape {
     const i = @intFromEnum(index);

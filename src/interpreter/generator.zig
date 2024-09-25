@@ -107,7 +107,7 @@ const Generator = struct {
 
     fn declareBuiltins(arena: Allocator, context: Context, module: Module) ![]const Builtin {
         const ptr_type = c.LLVMPointerTypeInContext(context, address_space);
-        // const u32_type = c.LLVMInt32TypeInContext(context);
+        const u32_type = c.LLVMInt32TypeInContext(context);
         const u64_type = c.LLVMInt64TypeInContext(context);
         const void_type = c.LLVMVoidTypeInContext(context);
 
@@ -115,6 +115,7 @@ const Generator = struct {
         const tvs = &.{
             .{ .push_args, .{ ptr_type, u64_type, ptr_type, ptr_type }, void_type },
             .{ .eval_callable, .{ ptr_type, ptr_type }, ptr_type },
+            .{ .trap, .{u32_type}, void_type },
         };
         try builtins.ensureTotalCapacity(tvs.len);
         inline for (comptime std.meta.tags(BuiltinIndex), tvs) |tag, tv| {
@@ -217,8 +218,8 @@ const Generator = struct {
         const generators = .{
             HandlerGenerator("ld", 3, ld),
             HandlerGenerator("ldw", 4, ldw),
-            exit, // TODO: ldg
-            exit, // TODO: stg
+            trap, // TODO: ldg
+            trap, // TODO: stg
             HandlerGenerator("mov", 3, mov),
             HandlerGenerator("itof", 3, itof),
             HandlerGenerator("ftoi", 3, ftoi),
@@ -236,8 +237,8 @@ const Generator = struct {
             HandlerGenerator("fdiv", 4, BinaryFloatHandler(c.LLVMFDiv)),
             HandlerGenerator("imod", 4, BinaryIntHandler(c.LLVMSRem)),
             HandlerGenerator("fmod", 4, BinaryFloatHandler(c.LLVMFRem)),
-            exit, // ipow
-            exit, // fpow
+            trap, // ipow
+            trap, // fpow
             HandlerGenerator("bor", 4, BinaryIntHandler(c.LLVMOr)),
             HandlerGenerator("band", 4, BinaryIntHandler(c.LLVMAnd)),
             HandlerGenerator("bxor", 4, BinaryIntHandler(c.LLVMXor)),
@@ -254,22 +255,22 @@ const Generator = struct {
             HandlerGenerator("ige", 4, BinaryIntCompareHandler(c.LLVMIntSGE)),
             HandlerGenerator("fge", 4, BinaryFloatCompareHandler(c.LLVMRealOGE)),
             call,
-            exit,
-            exit,
-            exit,
+            trap,
+            trap,
+            trap,
             // HandlerGenerator("callrt0", 2, callrt0),
             // HandlerGenerator("callrt1", 2, callrt0),
             // HandlerGenerator("callrt", 2, callrt0),
-            exit, // TODO: pint
-            exit, // TODO: pfloat
-            exit, // TODO: pbool
-            exit, // TODO: pstr
-            exit, // TODO: strlen
-            exit, // TODO: strcat
-            exit, // TODO: strrep
+            trap, // TODO: pint
+            trap, // TODO: pfloat
+            trap, // TODO: pbool
+            trap, // TODO: pstr
+            trap, // TODO: strlen
+            trap, // TODO: strcat
+            trap, // TODO: strrep
             br,
             jmp,
-            exit, // TODO: ret
+            trap, // TODO: ret
             exit,
         };
         self.declareJumpTable(generators.len);
@@ -570,6 +571,18 @@ const Generator = struct {
         const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
         c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
         _ = c.LLVMBuildRetVoid(self.builder);
+        return handler;
+    }
+
+    pub fn trap(self: *Generator) !Value {
+        const handler = try self.addHandler("exit", 1);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+
+        const ip = c.LLVMGetParam(handler, ip_param_index);
+        const opcode = c.LLVMBuildLoad2(self.builder, self.word_type, ip, "opcode");
+        self.callRuntimeVoid(.trap, &.{opcode});
+        _ = c.LLVMBuildUnreachable(self.builder);
         return handler;
     }
 

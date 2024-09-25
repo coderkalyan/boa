@@ -8,6 +8,7 @@ const Interpreter = @import("Interpreter.zig");
 const Bytecode = @import("../bc/Bytecode.zig");
 const BuiltinIndex = @import("../rt/builtins.zig").BuiltinIndex;
 const PageBumpAllocator = @import("../PageBumpAllocator.zig");
+const Object = @import("../rt/object.zig").Object;
 
 const Allocator = std.mem.Allocator;
 const FunctionInfo = InternPool.FunctionInfo;
@@ -49,6 +50,15 @@ pub fn evalCallable(fi_ptr: *FunctionInfo, sp: [*]i64) callconv(.C) *const anyop
     sp[0] = @bitCast(@intFromPtr(bc.code.ptr + 2));
     return interpreter_trampoline;
 }
+
+pub fn trap(opcode: Bytecode.Opcode) callconv(.C) void {
+    std.debug.print("trap: {}\n", .{opcode});
+    while (true) {}
+}
+
+// pub fn attrIndex(object: *Object, attr: InternPool.Index) usize {
+//
+// }
 
 pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: *FunctionInfo) !*const Bytecode {
     if (fi.lazy_bytecode == null) {

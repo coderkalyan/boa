@@ -199,10 +199,8 @@ pub fn interpret(
     std.debug.print("{x}\n", .{stack[fp].int});
 }
 
-// comptime {
-//     @export(builtins.rtHandler, .{ .name = "rt_handler", .linkage = .strong });
-// }
 comptime {
     @export(builtins.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });
     @export(builtins.evalCallable, .{ .name = "rt_eval_callable", .linkage = .strong });
+    @export(builtins.trap, .{ .name = "rt_trap", .linkage = .strong });
 }
