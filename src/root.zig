@@ -6,6 +6,7 @@ const Scope = @import("ir/Scope.zig");
 const IrGen = @import("ir/IrGen.zig");
 // const ShapePool = @import("rt/ShapePool.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
+const Shape = @import("rt/Shape.zig");
 
 comptime {
     _ = lex;
@@ -15,4 +16,5 @@ comptime {
     _ = IrGen;
     // _ = ShapePool;
     _ = PageBumpAllocator;
+    _ = Shape;
 }

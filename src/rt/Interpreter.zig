@@ -9,7 +9,7 @@ const String = @import("string.zig").String;
 const Object = @import("object.zig").Object;
 const ShapePool = @import("ShapePool.zig");
 const ConstantPool = @import("ConstantPool.zig");
-const builtins = @import("builtins.zig");
+const builtins = @import("builtins_impl.zig");
 
 const Allocator = std.mem.Allocator;
 const Word = Bytecode.Word;
