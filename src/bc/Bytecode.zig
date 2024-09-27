@@ -106,6 +106,7 @@ pub const Opcode = enum(u32) {
     fge,
 
     // function call
+    call1,
     call,
     // runtime call
     callrt0,

@@ -512,6 +512,14 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     const op2 = self.readWord(&pc).register;
                     try writer.print("x{}, x{}, x{}\n", .{ dst, op1, op2 });
                 },
+                .call1 => {
+                    const target = self.readWord(&pc).register;
+                    const ret = self.readWord(&pc).register;
+                    try writer.print("x{}, x{}", .{ target, ret });
+                    const arg = self.readWord(&pc).register;
+                    try writer.print(", x{}", .{arg});
+                    try writer.print("\n", .{});
+                },
                 .call => {
                     const target = self.readWord(&pc).register;
                     const ret = self.readWord(&pc).register;

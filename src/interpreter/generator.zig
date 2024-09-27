@@ -271,6 +271,7 @@ const Generator = struct {
             HandlerGenerator("fle", 4, BinaryFloatCompareHandler(c.LLVMRealOLE)),
             HandlerGenerator("ige", 4, BinaryIntCompareHandler(c.LLVMIntSGE)),
             HandlerGenerator("fge", 4, BinaryFloatCompareHandler(c.LLVMRealOGE)),
+            call1,
             call,
             trap,
             trap,
@@ -556,6 +557,53 @@ const Generator = struct {
 
         const target = self.loadRegister(2, "target");
         self.tailCallTarget(target);
+
+        _ = c.LLVMBuildRetVoid(self.builder);
+        return handler;
+    }
+
+    pub fn call1(self: *Generator) !Value {
+        const handler = try self.addHandler("call1", 3);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+        const ip = c.LLVMGetParam(handler, ip_param_index);
+        const fp = c.LLVMGetParam(handler, fp_param_index);
+        var sp = c.LLVMGetParam(handler, sp_param_index);
+        const ctx = c.LLVMGetParam(handler, ctx_param_index);
+
+        const ssp = sp;
+        // call the runtime to push arguments onto the stack
+        const arg_count = c.LLVMConstInt(self.usize_type, 1, @intFromBool(false));
+        const arg = self.loadRegister(3, "arg");
+        _ = c.LLVMBuildStore(self.builder, arg, sp);
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&arg_count), 1, "sp.args");
+
+        // push saved ip, fp, and return register
+        const sip_offset = c.LLVMConstInt(self.usize_type, 4, @intFromBool(false));
+        const sip = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&sip_offset), 1, "sip");
+        const sfp = fp;
+        const return_reg = self.readRegister(2, "ret.reg");
+        self.push(&sp, sip);
+        self.push(&sp, sfp);
+        self.push(&sp, ssp);
+        self.push(&sp, return_reg);
+
+        // TODO: frame pointer should be stack pointer, and sp pushed further
+        // fp = sp;
+
+        // call the runtime to evaluate the callable
+        const callable_int = self.loadRegister(1, "callable.int");
+        const callable = c.LLVMBuildIntToPtr(self.builder, callable_int, self.ptr_type, "callable");
+        const target = self.callRuntime(.eval_callable, &.{ ctx, callable, sp });
+        const two = c.LLVMConstInt(self.usize_type, 2, @intFromBool(false));
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&two), 1, "sp.next");
+
+        // tail call the target function
+        const poison = c.LLVMGetPoison(self.ptr_type);
+        const args: []const Value = &.{ poison, fp, sp, ctx };
+        const target_call = c.LLVMBuildCall2(self.builder, self.handler_type, target, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetTailCallKind(target_call, c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(target_call, c.LLVMGHCCallConv);
 
         _ = c.LLVMBuildRetVoid(self.builder);
         return handler;

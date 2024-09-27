@@ -538,12 +538,23 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     try self.register_map.put(self.arena, inst, dst);
 
     try self.code.ensureUnusedCapacity(self.gpa, 4 + args.len);
-    self.code.appendSliceAssumeCapacity(&.{
-        .{ .opcode = .call },
-        .{ .register = target },
-        .{ .register = dst },
-        .{ .count = @intCast(args.len) },
-    });
+    switch (args.len) {
+        1 => {
+            self.code.appendSliceAssumeCapacity(&.{
+                .{ .opcode = .call1 },
+                .{ .register = target },
+                .{ .register = dst },
+            });
+        },
+        else => {
+            self.code.appendSliceAssumeCapacity(&.{
+                .{ .opcode = .call },
+                .{ .register = target },
+                .{ .register = dst },
+                .{ .count = @intCast(args.len) },
+            });
+        },
+    }
     for (args) |ir_arg| {
         const arg = self.register_map.get(@enumFromInt(ir_arg)).?;
         if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
