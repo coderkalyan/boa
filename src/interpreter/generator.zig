@@ -115,7 +115,7 @@ const Generator = struct {
         var builtins = std.ArrayList(Builtin).init(arena);
         const tvs = &.{
             .{ .push_args, .{ ptr_type, u64_type, ptr_type, ptr_type }, void_type },
-            .{ .eval_callable, .{ ptr_type, ptr_type }, ptr_type },
+            .{ .eval_callable, .{ ptr_type, ptr_type, ptr_type }, ptr_type },
             .{ .trap, .{u32_type}, void_type },
             .{ .attr_index_or_panic, .{ ptr_type, u32_type }, u64_type },
             .{ .attr_index_or_insert, .{ ptr_type, u32_type }, u64_type },
@@ -348,9 +348,12 @@ const Generator = struct {
         const entry_block = c.LLVMAppendBasicBlock(function, "entry");
         c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
 
-        const fp = c.LLVMGetParam(function, fp_param_index);
+        var fp = c.LLVMGetParam(function, fp_param_index);
         var sp = c.LLVMGetParam(function, sp_param_index);
         const ctx = c.LLVMGetParam(function, ctx_param_index);
+
+        // pop the register count to calculate the stack pointer
+        const register_count = self.pop(&sp);
 
         // the runtime will have pushed the bytecode head to the VM stack,
         // so we can simply pop it and tail call the first opcode
@@ -365,6 +368,8 @@ const Generator = struct {
         const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
 
         // tail call the handler
+        fp = sp;
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&register_count), 1, "sp");
         const args: []const Value = &.{ ip, fp, sp, ctx };
         const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
         c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
@@ -573,12 +578,15 @@ const Generator = struct {
         self.push(&sp, sfp);
         self.push(&sp, return_reg);
 
+        // TODO: frame pointer should be stack pointer, and sp pushed further
+        // fp = sp;
+
         // call the runtime to evaluate the callable
         const callable_int = self.loadRegister(1, "callable.int");
         const callable = c.LLVMBuildIntToPtr(self.builder, callable_int, self.ptr_type, "callable");
-        const target = self.callRuntime(.eval_callable, &.{ callable, sp });
-        const one = c.LLVMConstInt(self.usize_type, 1, @intFromBool(false));
-        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&one), 1, "sp.next");
+        const target = self.callRuntime(.eval_callable, &.{ ctx, callable, sp });
+        const two = c.LLVMConstInt(self.usize_type, 2, @intFromBool(false));
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&two), 1, "sp.next");
 
         // tail call the target function
         const poison = c.LLVMGetPoison(self.ptr_type);
@@ -595,8 +603,11 @@ const Generator = struct {
         const function = try self.addHandler("ret", 2);
         const entry_block = c.LLVMAppendBasicBlock(function, "entry");
         c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
-        var sp = c.LLVMGetParam(function, sp_param_index);
+        const fp = c.LLVMGetParam(function, fp_param_index);
         const ctx = c.LLVMGetParam(function, ctx_param_index);
+
+        // pop the register file
+        var sp = fp;
 
         // pop the return register, fp, and ip
         const return_reg = self.pop(&sp);

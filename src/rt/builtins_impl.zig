@@ -39,16 +39,15 @@ extern fn interpreter_trampoline(ip: [*]const i32, fp: [*]i64, sp: [*]i64) void;
 
 // lookup the FunctionInfo pointer, lazily compile the function, and return
 // a jump target
-pub fn evalCallable(fi_ptr: *FunctionInfo, sp: [*]i64) callconv(.C) *const anyopaque {
+pub fn evalCallable(ctx: *Context, fi_ptr: *FunctionInfo, sp: [*]i64) callconv(.C) *const anyopaque {
     // std.debug.print("{}\n", .{fi_ptr});
     const intern_pool = fi_ptr.intern_pool;
-    var page_bump: PageBumpAllocator = .{};
-    const pba = page_bump.allocator();
-    var constant_pool = ConstantPool.init(intern_pool.gpa, pba);
+    var constant_pool = ConstantPool.init(intern_pool.gpa, ctx.pba);
     const bc = lazyCompileFunction(intern_pool, &constant_pool, fi_ptr) catch unreachable;
     std.debug.print("{} {*}\n", .{ bc, bc.code.ptr + 2 });
     // std.debug.print("{}\n", .{(bc.code.ptr + 2)[0].opcode});
     sp[0] = @bitCast(@intFromPtr(bc.code.ptr + 2));
+    sp[1] = bc.register_count;
     return interpreter_trampoline;
 }
 
