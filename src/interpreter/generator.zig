@@ -121,6 +121,7 @@ const Generator = struct {
             .{ .attr_index_or_insert, .{ ptr_type, u32_type }, u64_type },
             .{ .load_index, .{ ptr_type, u64_type }, u64_type },
             .{ .store_index, .{ ptr_type, u64_type, u64_type }, void_type },
+            .{ .pint, .{u64_type}, void_type },
         };
         try builtins.ensureTotalCapacity(tvs.len);
         inline for (comptime std.meta.tags(BuiltinIndex), tvs) |tag, tv| {
@@ -277,7 +278,7 @@ const Generator = struct {
             // HandlerGenerator("callrt0", 2, callrt0),
             // HandlerGenerator("callrt1", 2, callrt0),
             // HandlerGenerator("callrt", 2, callrt0),
-            trap, // TODO: pint
+            HandlerGenerator("pint", 2, pint), // TODO: pint
             trap, // TODO: pfloat
             trap, // TODO: pbool
             trap, // TODO: pstr
@@ -519,6 +520,11 @@ const Generator = struct {
         }.generator;
     }
 
+    pub fn pint(self: *Generator) !void {
+        const value = self.loadRegister(1, "int");
+        self.callRuntimeVoid(.pint, &.{value});
+    }
+
     pub fn br(self: *Generator) !Value {
         const handler = try self.addHandler("br", 3);
         const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
@@ -564,11 +570,13 @@ const Generator = struct {
         var sp = c.LLVMGetParam(handler, sp_param_index);
         const ctx = c.LLVMGetParam(handler, ctx_param_index);
 
+        const ssp = sp;
         // call the runtime to push arguments onto the stack
-        const arg_count = self.readImmediate(3, "arg.count");
+        const arg_count = self.readImmediateZ(3, "arg.count");
         const arg_offset = c.LLVMConstInt(self.usize_type, 4, @intFromBool(false));
         const arg_start = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&arg_offset), 1, "arg.start");
         self.callRuntimeVoid(.push_args, &.{ arg_start, arg_count, fp, sp });
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&arg_count), 1, "sp.args");
 
         // push saved ip, fp, and return register
         const sip = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, arg_start, @constCast(&arg_count), 1, "sip");
@@ -576,6 +584,7 @@ const Generator = struct {
         const return_reg = self.readRegister(2, "ret.reg");
         self.push(&sp, sip);
         self.push(&sp, sfp);
+        self.push(&sp, ssp);
         self.push(&sp, return_reg);
 
         // TODO: frame pointer should be stack pointer, and sp pushed further
@@ -611,6 +620,8 @@ const Generator = struct {
 
         // pop the return register, fp, and ip
         const return_reg = self.pop(&sp);
+        const ssp_int = self.pop(&sp);
+        const ssp = c.LLVMBuildIntToPtr(self.builder, ssp_int, self.ptr_type, "ssp");
         const sfp_int = self.pop(&sp);
         const sfp = c.LLVMBuildIntToPtr(self.builder, sfp_int, self.ptr_type, "sfp");
         const sip_int = self.pop(&sp);
@@ -618,7 +629,9 @@ const Generator = struct {
 
         // save the return value in the return register
         const src = self.loadRegister(1, "src");
-        self.storeStack(return_reg, src, "ret.val");
+        const stack_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sfp, @constCast(&return_reg), 1, "ret.val.ptr");
+        const store = c.LLVMBuildStore(self.builder, src, stack_gep);
+        c.LLVMSetAlignment(store, @alignOf(u64));
 
         // and use it to read the opcode of the next instruction (to lookup the handler)
         const next_opcode = c.LLVMBuildLoad2(self.builder, self.word_type, sip, "opcode.next");
@@ -629,7 +642,7 @@ const Generator = struct {
         const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
 
         // tail call the handler
-        const args: []const Value = &.{ sip, sfp, sp, ctx };
+        const args: []const Value = &.{ sip, sfp, ssp, ctx };
         const handler_call = c.LLVMBuildCall2(self.builder, self.handler_type, handler, @constCast(args.ptr), @intCast(args.len), "");
         c.LLVMSetTailCallKind(handler_call, c.LLVMTailCallKindMustTail);
         c.LLVMSetInstructionCallConv(handler_call, c.LLVMGHCCallConv);

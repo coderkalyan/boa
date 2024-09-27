@@ -10,6 +10,7 @@ pub const BuiltinIndex = enum(u32) {
     attr_index_or_insert,
     load_index,
     store_index,
+    pint,
 };
 
 pub const Context = struct {

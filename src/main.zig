@@ -88,14 +88,14 @@ pub fn main() !void {
 
     const bc_data = try Assembler.assemble(gpa, &pool, &constant_pool, ir);
     const bc_index = try pool.createBytecode(bc_data);
-    const bc = pool.bytecodePtr(bc_index);
-    {
-        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-        // _ = bytecode_renderer;
-        var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
-        try renderer.render();
-        try buffered_out.flush();
-    }
+    // const bc = pool.bytecodePtr(bc_index);
+    // {
+    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+    //     // _ = bytecode_renderer;
+    //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
+    //     try renderer.render();
+    //     try buffered_out.flush();
+    // }
 
     const findex = try pool.createFunction(.{
         .intern_pool = &pool,
@@ -212,4 +212,5 @@ comptime {
     @export(builtins_impl.attrIndexOrInsert, .{ .name = "rt_attr_index_or_insert", .linkage = .strong });
     @export(builtins_impl.loadIndex, .{ .name = "rt_load_index", .linkage = .strong });
     @export(builtins_impl.storeIndex, .{ .name = "rt_store_index", .linkage = .strong });
+    @export(builtins_impl.pint, .{ .name = "rt_pint", .linkage = .strong });
 }

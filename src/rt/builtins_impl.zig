@@ -29,7 +29,7 @@ pub fn pushArgs(start: [*]const i32, count: u64, fp: [*]i64, sp: [*]i64) callcon
         const register = start[i];
         const base: usize = @intCast(@as(i128, @intFromPtr(fp)) + @sizeOf(i64) * register);
         const src: [*]i64 = @ptrFromInt(base);
-        // std.debug.print("pushing {}\n", .{register});
+        // std.debug.print("pushing {}\n", .{src[0]});
         @memcpy(asBytes(dst)[0..8], asBytes(src)[0..8]);
         dst += 1;
     }
@@ -74,6 +74,10 @@ pub fn loadIndex(ctx: *Context, index: usize) callconv(.C) i64 {
 
 pub fn storeIndex(ctx: *Context, index: usize, value: i64) callconv(.C) void {
     ctx.global_object.attributes.items[index] = value;
+}
+
+pub fn pint(value: i64) callconv(.C) void {
+    std.debug.print("{}\n", .{value});
 }
 
 pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: *FunctionInfo) !*const Bytecode {

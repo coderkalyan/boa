@@ -514,9 +514,10 @@ fn argInst(self: *Assembler, inst: Ir.Index) !void {
     // arguments are indexed as -1, -2, -3... but:
     // fp[-1] is the return register
     // fp[-2] is the saved frame pointer
+    // fp[-3] is the saved stack pointer
     // fp[-3] is the saved instruction pointer
-    // so we start at -4
-    try self.register_map.put(self.arena, inst, -4 - pos);
+    // so we start at -5
+    try self.register_map.put(self.arena, inst, -5 - pos);
 }
 
 fn call(self: *Assembler, inst: Ir.Index) !void {
