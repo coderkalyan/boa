@@ -532,7 +532,7 @@ const Generator = struct {
         _ = c.LLVMBuildCondBr(self.builder, predicate, taken, skipped);
 
         c.LLVMPositionBuilderAtEnd(self.builder, taken);
-        const target = self.loadRegister(2, "target");
+        const target = self.readImmediate(2, "target");
         self.tailCallTarget(target);
         _ = c.LLVMBuildRetVoid(self.builder);
 
@@ -611,11 +611,14 @@ const Generator = struct {
 
         // pop the return register, fp, and ip
         const return_reg = self.pop(&sp);
-        _ = return_reg;
         const sfp_int = self.pop(&sp);
         const sfp = c.LLVMBuildIntToPtr(self.builder, sfp_int, self.ptr_type, "sfp");
         const sip_int = self.pop(&sp);
         const sip = c.LLVMBuildIntToPtr(self.builder, sip_int, self.ptr_type, "sip");
+
+        // save the return value in the return register
+        const src = self.loadRegister(1, "src");
+        self.storeStack(return_reg, src, "ret.val");
 
         // and use it to read the opcode of the next instruction (to lookup the handler)
         const next_opcode = c.LLVMBuildLoad2(self.builder, self.word_type, sip, "opcode.next");
@@ -787,7 +790,7 @@ const Generator = struct {
 
         // load the handler pointer from the jump table using the opcode
         const jump_table = c.LLVMGetNamedGlobal(self.module, "jump_table");
-        const handler_ptr = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, jump_table, @constCast(&next_opcode), 1, "handler.ptr");
+        const handler_ptr = c.LLVMBuildInBoundsGEP2(self.builder, self.ptr_type, jump_table, @constCast(&next_opcode), 1, "handler.ptr");
         const handler = c.LLVMBuildLoad2(self.builder, self.ptr_type, handler_ptr, "handler");
 
         // tail call the handler

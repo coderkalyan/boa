@@ -27,9 +27,9 @@ pub fn pushArgs(start: [*]const i32, count: u64, fp: [*]i64, sp: [*]i64) callcon
     while (i > 0) {
         i -= 1;
         const register = start[i];
-        const base: usize = @intCast(@as(i128, @intFromPtr(fp)) + register);
+        const base: usize = @intCast(@as(i128, @intFromPtr(fp)) + @sizeOf(i64) * register);
         const src: [*]i64 = @ptrFromInt(base);
-        std.debug.print("pushing {}\n", .{register});
+        // std.debug.print("pushing {}\n", .{register});
         @memcpy(asBytes(dst)[0..8], asBytes(src)[0..8]);
         dst += 1;
     }
@@ -44,7 +44,7 @@ pub fn evalCallable(ctx: *Context, fi_ptr: *FunctionInfo, sp: [*]i64) callconv(.
     const intern_pool = fi_ptr.intern_pool;
     var constant_pool = ConstantPool.init(intern_pool.gpa, ctx.pba);
     const bc = lazyCompileFunction(intern_pool, &constant_pool, fi_ptr) catch unreachable;
-    std.debug.print("{} {*}\n", .{ bc, bc.code.ptr + 2 });
+    // std.debug.print("{} {*}\n", .{ bc, bc.code.ptr + 2 });
     // std.debug.print("{}\n", .{(bc.code.ptr + 2)[0].opcode});
     sp[0] = @bitCast(@intFromPtr(bc.code.ptr + 2));
     sp[1] = bc.register_count;
@@ -94,15 +94,15 @@ pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: 
         const ir = pool.irPtr(fi.lazy_ir.?);
         const bc_data = Assembler.assemble(pool.gpa, pool, constant_pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
-        std.debug.print("compile!\n", .{});
-        const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-        {
-            std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
-            const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-            // _ = bytecode_renderer;
-            var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-            renderer.render() catch unreachable;
-        }
+        // std.debug.print("compile!\n", .{});
+        // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+        // {
+        //     std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
+        //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+        //     // _ = bytecode_renderer;
+        //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+        //     renderer.render() catch unreachable;
+        // }
     }
 
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);

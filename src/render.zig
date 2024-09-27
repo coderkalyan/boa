@@ -404,7 +404,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
             const opcode = code[pc].opcode;
             pc += 1;
 
-            try writer.print("{s} ", .{@tagName(opcode)});
+            try writer.print("{} {s} ", .{ pc - 1, @tagName(opcode) });
             switch (opcode) {
                 .ld => {
                     const dst = self.readWord(&pc).register;
@@ -422,7 +422,7 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     const imm = lower | (@as(u64, upper) << 32);
                     try writer.print("x{}, 0x{x:0>8}\n", .{ dst, imm });
                 },
-                .callrt0, .callrt1, .callrt => {},
+                .callrt0, .callrt1, .callrt => unreachable,
                 // .ldi => {
                 //     const dst = self.readWord(&pc).register;
                 //     const ip = self.readWord(&pc).ip;
@@ -454,17 +454,26 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .branch => {
                     const condition = self.readWord(&pc).register;
                     const target = self.readWord(&pc).target;
-                    try writer.print("x{}, {}\n", .{ condition, target });
+                    const absolute = pc - 3 + target;
+                    try writer.print("x{}, +{} ({})\n", .{ condition, target, absolute });
                 },
                 .jump => {
                     const target = self.readWord(&pc).target;
                     try writer.print("{}\n", .{target});
                 },
                 .exit => try writer.print("\n", .{}),
-                .ldg, .stg => {
+                .ldg => {
                     const dst = self.readWord(&pc).register;
                     const ip = self.readWord(&pc).ip;
+                    _ = self.readWord(&pc); // ic index
                     try writer.print("x{}, ", .{dst});
+                    try self.pool.print(writer, ip);
+                    try writer.print("\n", .{});
+                },
+                .stg => {
+                    const src = self.readWord(&pc).register;
+                    const ip = self.readWord(&pc).ip;
+                    try writer.print("x{}, ", .{src});
                     try self.pool.print(writer, ip);
                     try writer.print("\n", .{});
                 },

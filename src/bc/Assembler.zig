@@ -230,11 +230,11 @@ fn patchInst(self: *Assembler, current_block: Ir.BlockIndex, loc: u32, patch: Pa
     const ir = self.ir;
     const payload = ir.instPayload(patch.ir_inst);
     switch (ir.instTag(patch.ir_inst)) {
-        .jmp => self.updateJump(patch.bc_inst, loc),
+        .jmp => self.updateJump(patch.bc_inst, loc - patch.bc_inst),
         .br => {
             const branch = ir.extraData(Ir.Inst.Branch, payload.unary_extra.extra);
             if (branch.exec_if == current_block) {
-                self.updateBranch(patch.bc_inst, loc);
+                self.updateBranch(patch.bc_inst, loc - patch.bc_inst);
             }
         },
         .phi => {
@@ -511,9 +511,12 @@ fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
 fn argInst(self: *Assembler, inst: Ir.Index) !void {
     const arg = self.ir.instPayload(inst).arg;
     const pos: i32 = @intCast(arg.position);
-    // arguments are indexed as -1, -2,... but stack[fp - 1] is the call frame pointer
-    // so we start at -2
-    try self.register_map.put(self.arena, inst, -2 - pos);
+    // arguments are indexed as -1, -2, -3... but:
+    // fp[-1] is the return register
+    // fp[-2] is the saved frame pointer
+    // fp[-3] is the saved instruction pointer
+    // so we start at -4
+    try self.register_map.put(self.arena, inst, -4 - pos);
 }
 
 fn call(self: *Assembler, inst: Ir.Index) !void {
