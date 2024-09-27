@@ -94,7 +94,7 @@ pub fn assemble(
         try assembler.generateBlock(current, next);
     }
 
-    const entry_pc: usize = 4;
+    const entry_pc: usize = 2;
     // const constants = try assembler.constants.toOwnedSlice(assembler.gpa);
     // const ptr: usize = @intFromPtr(constants.ptr);
     // assembler.code.items[2] = .{ .imm = @truncate(ptr) };

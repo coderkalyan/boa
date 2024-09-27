@@ -414,13 +414,22 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     const float: f32 = @bitCast(imm);
                     try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
                 },
-                .ldi => {
+                .ldw => {
                     const dst = self.readWord(&pc).register;
-                    const ip = self.readWord(&pc).ip;
-                    try writer.print("x{}, ", .{dst});
-                    try self.pool.print(writer, ip);
-                    try writer.print("\n", .{});
+                    const lower = self.readWord(&pc).imm;
+                    const upper = self.readWord(&pc).imm;
+
+                    const imm = lower | (@as(u64, upper) << 32);
+                    try writer.print("x{}, 0x{x:0>8}\n", .{ dst, imm });
                 },
+                .callrt0, .callrt1, .callrt => {},
+                // .ldi => {
+                //     const dst = self.readWord(&pc).register;
+                //     const ip = self.readWord(&pc).ip;
+                //     try writer.print("x{}, ", .{dst});
+                //     try self.pool.print(writer, ip);
+                //     try writer.print("\n", .{});
+                // },
                 .pint,
                 .pfloat,
                 .pbool,

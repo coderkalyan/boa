@@ -6,9 +6,10 @@ const String = @import("string.zig").String;
 const ConstantPool = @import("ConstantPool.zig");
 const Interpreter = @import("Interpreter.zig");
 const Bytecode = @import("../bc/Bytecode.zig");
-const BuiltinIndex = @import("../rt/builtins.zig").BuiltinIndex;
 const PageBumpAllocator = @import("../PageBumpAllocator.zig");
 const Object = @import("../rt/object.zig").Object;
+const Context = @import("../interpreter/builtins.zig").Context;
+const render = @import("../render.zig");
 
 const Allocator = std.mem.Allocator;
 const FunctionInfo = InternPool.FunctionInfo;
@@ -56,9 +57,25 @@ pub fn trap(opcode: Bytecode.Opcode) callconv(.C) void {
     while (true) {}
 }
 
-// pub fn attrIndex(object: *Object, attr: InternPool.Index) usize {
-//
-// }
+pub fn attrIndexOrPanic(ctx: *Context, attr: InternPool.Index) callconv(.C) usize {
+    return ctx.global_object.shape.get(attr).?;
+}
+
+pub fn attrIndexOrInsert(ctx: *Context, attr: InternPool.Index) callconv(.C) usize {
+    const global = ctx.global_object;
+    if (global.shape.get(attr)) |index| return index;
+    global.shape = global.shape.transition(ctx.pba, attr) catch unreachable;
+    _ = global.attributes.addOne(ctx.pba) catch unreachable;
+    return ctx.global_object.shape.get(attr).?;
+}
+
+pub fn loadIndex(ctx: *Context, index: usize) callconv(.C) i64 {
+    return ctx.global_object.attributes.items[index];
+}
+
+pub fn storeIndex(ctx: *Context, index: usize, value: i64) callconv(.C) void {
+    ctx.global_object.attributes.items[index] = value;
+}
 
 pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: *FunctionInfo) !*const Bytecode {
     if (fi.lazy_bytecode == null) {
@@ -78,15 +95,15 @@ pub fn lazyCompileFunction(pool: *InternPool, constant_pool: *ConstantPool, fi: 
         const ir = pool.irPtr(fi.lazy_ir.?);
         const bc_data = Assembler.assemble(pool.gpa, pool, constant_pool, ir) catch unreachable;
         fi.lazy_bytecode = pool.createBytecode(bc_data) catch unreachable;
-        // std.debug.print("compile!\n", .{});
-        // const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
-        // {
-        //     std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
-        //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-        //     // _ = bytecode_renderer;
-        //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
-        //     renderer.render() catch unreachable;
-        // }
+        std.debug.print("compile!\n", .{});
+        const bc = pool.bytecodePtr(fi.lazy_bytecode.?);
+        {
+            std.debug.print("bytecode listing for function: {}\n", .{bc.code.len});
+            const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+            // _ = bytecode_renderer;
+            var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), pool.gpa, pool, bc);
+            renderer.render() catch unreachable;
+        }
     }
 
     const bc = pool.bytecodePtr(fi.lazy_bytecode.?);

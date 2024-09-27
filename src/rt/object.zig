@@ -1,8 +1,7 @@
 const std = @import("std");
-const ShapePool = @import("ShapePool.zig");
+const Shape = @import("Shape.zig");
 
 const Allocator = std.mem.Allocator;
-const Shape = ShapePool.Shape;
 
 pub const Object = struct {
     shape: *Shape,
