@@ -7,7 +7,7 @@ const Ir = @import("../ir/Ir.zig");
 const render = @import("../render.zig");
 const String = @import("string.zig").String;
 const Object = @import("object.zig").Object;
-const ShapePool = @import("ShapePool.zig");
+const Shape = @import("Shape.zig");
 const ConstantPool = @import("ConstantPool.zig");
 const builtins = @import("builtins_impl.zig");
 
@@ -15,7 +15,6 @@ const Allocator = std.mem.Allocator;
 const Word = Bytecode.Word;
 const Opcode = Bytecode.Opcode;
 const asBytes = std.mem.asBytes;
-const Shape = ShapePool.Shape;
 // pub const GlobalMap = std.AutoHashMap(InternPool.Index, i64);
 const FunctionInfo = InternPool.FunctionInfo;
 
@@ -28,7 +27,6 @@ pub const Slot = extern union {
 pub const ContextFrame = extern struct {
     pba: *const Allocator,
     global_object: *Object,
-    shape_pool: *ShapePool,
     constant_pool: *ConstantPool,
     ic_vector: [*]u32,
 
