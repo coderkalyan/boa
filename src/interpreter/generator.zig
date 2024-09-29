@@ -294,6 +294,7 @@ const Generator = struct {
         self.declareJumpTable(generators.len);
         self.declareRtHandler();
 
+        _ = try self.addHandler("trampoline", 1);
         var handlers: [generators.len]Value = undefined;
         inline for (generators, 0..) |generator, i| {
             handlers[i] = try generator(self);
@@ -342,7 +343,8 @@ const Generator = struct {
     }
 
     fn trampoline(self: *Generator) !Value {
-        const function = try self.addHandler("trampoline", 1);
+        // const function = try self.addHandler("trampoline", 1);
+        const function = c.LLVMGetNamedFunction(self.module, "interpreter_trampoline");
         // this handler has to be visible externally so the runtime can
         // point to it, but is otherwise the same
         c.LLVMSetLinkage(function, c.LLVMExternalLinkage);
@@ -532,7 +534,9 @@ const Generator = struct {
         c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
 
         const predicate_int = self.loadOperand(1, "predicate.int");
-        const predicate = c.LLVMBuildTruncOrBitCast(self.builder, predicate_int, self.bool_type, "predicate");
+        const zero = c.LLVMConstInt(self.usize_type, 0, @intFromBool(false));
+        const predicate = c.LLVMBuildICmp(self.builder, c.LLVMIntNE, predicate_int, zero, "predicate");
+        // const predicate = c.LLVMBuildTruncOrBitCast(self.builder, predicate_int, self.bool_type, "predicate");
 
         const taken = c.LLVMAppendBasicBlock(handler, "taken");
         const skipped = c.LLVMAppendBasicBlock(handler, "skipped");
@@ -594,7 +598,8 @@ const Generator = struct {
         // call the runtime to evaluate the callable
         const callable_int = self.loadOperand(1, "callable.int");
         const callable = c.LLVMBuildIntToPtr(self.builder, callable_int, self.ptr_type, "callable");
-        const target = self.callRuntime(.eval_callable, &.{ ctx, callable, sp });
+        var target = self.callRuntime(.eval_callable, &.{ ctx, callable, sp });
+        target = c.LLVMGetNamedFunction(self.module, "interpreter_trampoline");
         const two = c.LLVMConstInt(self.usize_type, 2, @intFromBool(false));
         sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&two), 1, "sp.next");
 
