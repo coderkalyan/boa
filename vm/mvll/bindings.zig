@@ -136,10 +136,8 @@ pub const Module = extern opaque {
     extern fn LLVMAddFunction(module: *Module, name: [*:0]const u8, ty: *Type) *Value;
     pub const addFunction = LLVMAddFunction;
 
-    extern fn LLVMGetNamedFunctionWithLength(module: *Module, name: [*:0]const u8, len: usize) *Value;
-    pub inline fn getNamedFunction(module: *Module, name: []const u8) *Value {
-        return LLVMGetNamedFunctionWithLength(module, name.ptr, name.len);
-    }
+    extern fn LLVMGetNamedFunction(module: *Module, name: [*:0]const u8) *Value;
+    pub const getNamedFunction = LLVMGetNamedFunction;
 
     extern fn LLVMGetFirstFunction(module: *Module) *Value;
     pub const getFirstFunction = LLVMGetFirstFunction;

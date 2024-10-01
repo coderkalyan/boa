@@ -5,66 +5,70 @@ pub const Opcode = enum(u32) {
     ldw,
 
     // int to float
-    itof,
+    // itof,
     // float to int
-    ftoi,
+    // ftoi,
 
+    // move (copy) register
+    mov,
     // integer negation
-    ineg,
+    // ineg,
     // float negation
-    fneg,
+    // fneg,
     // bitwise invert
-    binv,
+    // binv,
     // boolean invert
-    lnot,
+    // lnot,
 
     // binary operations
-    iadd,
-    isub,
-    imul,
-    idiv,
-    imod,
-
-    fadd,
-    fsub,
-    fmul,
-    fdiv,
-    fmod,
-
-    bor,
-    band,
-    bxor,
-    sll,
-    sra,
-
-    ieq,
-    ine,
-    ilt,
-    igt,
-    ile,
-    ige,
-
-    flt,
-    fgt,
-    fle,
-    fge,
+    // iadd,
+    // isub,
+    // imul,
+    // idiv,
+    // imod,
+    //
+    // fadd,
+    // fsub,
+    // fmul,
+    // fdiv,
+    // fmod,
+    //
+    // bor,
+    // band,
+    // bxor,
+    // sll,
+    // sra,
+    //
+    // ieq,
+    // ine,
+    // ilt,
+    // igt,
+    // ile,
+    // ige,
+    //
+    // flt,
+    // fgt,
+    // fle,
+    // fge,
 
     // push a single argument in preparation of function or runtime call
-    push,
+    // push,
     // push multiple arguments
-    push_multi,
+    // push_multi,
 
     // python function call
-    call,
+    // call,
     // runtime call
-    callrt,
+    // callrt,
 
     // jump by offset if register is true
-    br,
+    // br,
     // unconditionally jump to index
-    jmp,
+    // jmp,
     // return from a function call
-    ret,
+    // ret,
     // exit the interpreter
     exit,
+    // trap the interpreter
+    trap,
 };
