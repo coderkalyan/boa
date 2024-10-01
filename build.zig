@@ -4,20 +4,12 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
     // The interpreter is generated at build time using a Zig program that
     // uses LLVM to emit efficient bytecode handlers.
-    const interpreter_generator = b.addExecutable(.{
+    const generator = b.addExecutable(.{
         .name = "interpreter-generator",
         .root_source_file = b.path("src/interpreter/generator.zig"),
         .target = target,
@@ -25,12 +17,37 @@ pub fn build(b: *std.Build) void {
     });
 
     // The generator depends on libc and LLVM.
-    interpreter_generator.linkLibC();
-    interpreter_generator.linkSystemLibrary("LLVM-18");
+    generator.linkLibC();
+    generator.linkSystemLibrary("LLVM-18");
 
     // Run the generator and capture its output LLVM bitcode.
-    const generator_step = b.addRunArtifact(interpreter_generator);
-    const interpreter_bc = generator_step.addOutputFileArg("interpreter.bc");
+    const run_generator_user = b.addRunArtifact(generator);
+    if (b.args) |args| {
+        run_generator_user.addArgs(args);
+    }
+
+    // Add a user facing step to run only the generator.
+    const run_generator_step = b.step("run-generator", "Run the interpreter generator");
+    run_generator_step.dependOn(&run_generator_user.step);
+
+    // Test the generator.
+    const generator_tests = b.addTest(.{
+        .root_source_file = b.path("src/interpreter/generator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    generator_tests.linkLibC();
+    generator_tests.linkSystemLibrary("LLVM-18");
+    const run_generator_tests = b.addRunArtifact(generator_tests);
+
+    // Add a user facing step to test the generator.
+    const test_generator_step = b.step("test-generator", "Run interpreter generator unit tests");
+    test_generator_step.dependOn(&run_generator_tests.step);
+
+    // Run the generator (as part of the main build process) and capture its output LLVM bitcode.
+    const run_generator = b.addRunArtifact(generator);
+    const interpreter_bc = run_generator.addOutputFileArg("interpreter.bc");
 
     // Run the bitcode through the standard optimizer.
     const opt_run = b.addSystemCommand(&.{"opt"});
@@ -90,9 +107,20 @@ pub fn build(b: *std.Build) void {
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
+    const vm_unit_tests = b.addTest(.{
+        .root_source_file = b.path("vm/assembler.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    vm_unit_tests.linkLibC();
+    vm_unit_tests.linkSystemLibrary("LLVM-18");
+    const run_vm_unit_tests = b.addRunArtifact(vm_unit_tests);
+
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_vm_unit_tests.step);
 }
