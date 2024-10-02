@@ -12,13 +12,13 @@ pub const Opcode = enum(u32) {
     // move (copy) register
     mov,
     // integer negation
-    // ineg,
+    ineg,
     // float negation
-    // fneg,
+    fneg,
     // bitwise invert
-    // binv,
+    binv,
     // boolean invert
-    // lnot,
+    lnot,
 
     // binary operations
     // iadd,

@@ -38,6 +38,10 @@ const Assembler = struct {
         .{ .opcode = .ld, .words = 3, .generator = ld, .next = .default },
         .{ .opcode = .ldw, .words = 4, .generator = ldw, .next = .default },
         .{ .opcode = .mov, .words = 3, .generator = mov, .next = .default },
+        .{ .opcode = .ineg, .words = 3, .generator = ineg, .next = .default },
+        .{ .opcode = .fneg, .words = 3, .generator = fneg, .next = .default },
+        .{ .opcode = .binv, .words = 3, .generator = binv, .next = .default },
+        .{ .opcode = .lnot, .words = 3, .generator = lnot, .next = .default },
         .{ .opcode = .exit, .words = 1, .generator = exit, .next = .none },
         .{ .opcode = .trap, .words = 1, .generator = trap, .next = .none },
     };
@@ -357,6 +361,32 @@ const Assembler = struct {
     fn mov(self: *Assembler) !void {
         const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
         self.store(self.read(self.offset(1), .sext, "dst.reg"), src, .integer, "dst");
+    }
+
+    fn ineg(self: *Assembler) !void {
+        const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
+        const neg = self.builder.neg(src, "ineg");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), neg, .integer, "dst");
+    }
+
+    fn fneg(self: *Assembler) !void {
+        const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .double, "src");
+        const neg = self.builder.fneg(src, "fneg");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), neg, .double, "dst");
+    }
+
+    fn binv(self: *Assembler) !void {
+        const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
+        const mask = self.iconst(-1);
+        const inv = self.builder.binary(.xor, src, mask, "binv");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, .integer, "dst");
+    }
+
+    fn lnot(self: *Assembler) !void {
+        const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
+        const zero = self.iconst(0);
+        const not = self.builder.icmp(.eq, src, zero, "lnot");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), not, .integer, "dst");
     }
 
     fn exit(self: *Assembler) !void {
