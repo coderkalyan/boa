@@ -203,3 +203,158 @@ test "lnot" {
         .offsets = .{ 3, 0, 0 },
     });
 }
+
+test "iadd" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.iadd, 0, 0, 1 },
+        .in_stack = .{ 100, 200 },
+        .frame_size = 2,
+        .out_stack = .{ 300, 200 },
+        .offsets = .{ 4, 0, 0 },
+    });
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.iadd, 0, 0, 1 },
+        .in_stack = .{ std.math.maxInt(i64), -std.math.maxInt(i64) },
+        .frame_size = 2,
+        .out_stack = .{ 0, -std.math.maxInt(i64) },
+        .offsets = .{ 4, 0, 0 },
+    });
+}
+
+test "isub" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.isub, 0, 0, 1 },
+        .in_stack = .{ 100, 200 },
+        .frame_size = 2,
+        .out_stack = .{ -100, 200 },
+        .offsets = .{ 4, 0, 0 },
+    });
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.isub, 0, 0, 1 },
+        .in_stack = .{ 0, std.math.maxInt(i64) },
+        .frame_size = 2,
+        .out_stack = .{ -std.math.maxInt(i64), std.math.maxInt(i64) },
+        .offsets = .{ 4, 0, 0 },
+    });
+}
+
+test "imul" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.imul, 0, 0, 1 },
+        .in_stack = .{ 123, -2 },
+        .frame_size = 2,
+        .out_stack = .{ -246, -2 },
+        .offsets = .{ 4, 0, 0 },
+    });
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.imul, 0, 0, 1 },
+        .in_stack = .{ 0, 0 },
+        .frame_size = 2,
+        .out_stack = .{ 0, 0 },
+        .offsets = .{ 4, 0, 0 },
+    });
+}
+
+test "idiv" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.idiv, 0, 0, 1 },
+        .in_stack = .{ 246, -2 },
+        .frame_size = 2,
+        .out_stack = .{ -123, -2 },
+        .offsets = .{ 4, 0, 0 },
+    });
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.idiv, 0, 0, 1 },
+        .in_stack = .{ 7, 3 },
+        .frame_size = 2,
+        .out_stack = .{ 2, 3 },
+        .offsets = .{ 4, 0, 0 },
+    });
+}
+
+test "imod" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.imod, 0, 0, 1 },
+        .in_stack = .{ 246, -2 },
+        .frame_size = 2,
+        .out_stack = .{ 0, -2 },
+        .offsets = .{ 4, 0, 0 },
+    });
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.imod, 0, 0, 1 },
+        .in_stack = .{ 7, 3 },
+        .frame_size = 2,
+        .out_stack = .{ 1, 3 },
+        .offsets = .{ 4, 0, 0 },
+    });
+}
+
+test "push_one" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.push_one, 0 },
+        .in_stack = .{ 100, 0, 0 },
+        .frame_size = 1,
+        .out_stack = .{ 100, 100, 0 },
+        .offsets = .{ 2, 0, 1 },
+    });
+}
+
+test "push_multi" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.push_multi, 4, 1, 2, 0, 3 },
+        .in_stack = .{ 100, 200, 300, 400, 0, 0, 0, 0, 0 },
+        .frame_size = 4,
+        .out_stack = .{ 100, 200, 300, 400, 200, 300, 100, 400, 0 },
+        .offsets = .{ 6, 0, 4 },
+    });
+}
+
+pub fn main() !void {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const tape = try allocTape(arena, .{ Opcode.binv, 0, 1 } ** 100);
+    const in_stack = try allocStack(arena, .{ 0, 0xcafeb0ba });
+
+    const ip = tape.ptr;
+    const fp = in_stack.ptr;
+    const sp = fp + 2;
+
+    for (0..100_000) |_| {
+        interpreter_entry(ip, fp, sp, undefined);
+    }
+}

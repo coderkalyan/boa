@@ -42,6 +42,35 @@ const Assembler = struct {
         .{ .opcode = .fneg, .words = 3, .generator = fneg, .next = .default },
         .{ .opcode = .binv, .words = 3, .generator = binv, .next = .default },
         .{ .opcode = .lnot, .words = 3, .generator = lnot, .next = .default },
+        .{ .opcode = .iadd, .words = 4, .generator = Binary(.add, .integer), .next = .default },
+        .{ .opcode = .isub, .words = 4, .generator = Binary(.sub, .integer), .next = .default },
+        .{ .opcode = .imul, .words = 4, .generator = Binary(.mul, .integer), .next = .default },
+        .{ .opcode = .idiv, .words = 4, .generator = Binary(.sdiv, .integer), .next = .default },
+        .{ .opcode = .imod, .words = 4, .generator = Binary(.srem, .integer), .next = .default },
+        .{ .opcode = .fadd, .words = 4, .generator = Binary(.fadd, .double), .next = .default },
+        .{ .opcode = .fsub, .words = 4, .generator = Binary(.fsub, .double), .next = .default },
+        .{ .opcode = .fmul, .words = 4, .generator = Binary(.fmul, .double), .next = .default },
+        .{ .opcode = .fdiv, .words = 4, .generator = Binary(.fdiv, .double), .next = .default },
+        .{ .opcode = .fmod, .words = 4, .generator = Binary(.frem, .double), .next = .default },
+        .{ .opcode = .bor, .words = 4, .generator = Binary(.@"or", .integer), .next = .default },
+        .{ .opcode = .band, .words = 4, .generator = Binary(.@"and", .integer), .next = .default },
+        .{ .opcode = .bxor, .words = 4, .generator = Binary(.xor, .integer), .next = .default },
+        .{ .opcode = .sll, .words = 4, .generator = Binary(.sll, .integer), .next = .default },
+        .{ .opcode = .sra, .words = 4, .generator = Binary(.sra, .integer), .next = .default },
+        .{ .opcode = .ieq, .words = 4, .generator = CompareInt(.eq), .next = .default },
+        .{ .opcode = .ine, .words = 4, .generator = CompareInt(.ne), .next = .default },
+        .{ .opcode = .ilt, .words = 4, .generator = CompareInt(.slt), .next = .default },
+        .{ .opcode = .igt, .words = 4, .generator = CompareInt(.sgt), .next = .default },
+        .{ .opcode = .ile, .words = 4, .generator = CompareInt(.sle), .next = .default },
+        .{ .opcode = .ige, .words = 4, .generator = CompareInt(.sge), .next = .default },
+        .{ .opcode = .flt, .words = 4, .generator = CompareFloat(.olt), .next = .default },
+        .{ .opcode = .fgt, .words = 4, .generator = CompareFloat(.ogt), .next = .default },
+        .{ .opcode = .fle, .words = 4, .generator = CompareFloat(.ole), .next = .default },
+        .{ .opcode = .fge, .words = 4, .generator = CompareFloat(.oge), .next = .default },
+        .{ .opcode = .push_one, .words = 2, .generator = pushOne, .next = .none },
+        .{ .opcode = .push_multi, .words = 2, .generator = pushMulti, .next = .none },
+        .{ .opcode = .br, .words = 3, .generator = br, .next = .none },
+        .{ .opcode = .jmp, .words = 2, .generator = jmp, .next = .none },
         .{ .opcode = .exit, .words = 1, .generator = exit, .next = .none },
         .{ .opcode = .trap, .words = 1, .generator = trap, .next = .none },
     };
@@ -168,7 +197,7 @@ const Assembler = struct {
         const sp_param = c.LLVMGetParam(@ptrCast(handler), sp_param_index);
         c.LLVMAddAttributeAtIndex(@ptrCast(handler), sp_param_index + 1, enumAttribute(ctx, nonnull, null));
         c.LLVMSetParamAlignment(sp_param, 8);
-        c.LLVMSetValueName2(fp_param, "sp", "sp".len);
+        c.LLVMSetValueName2(sp_param, "sp", "sp".len);
 
         // ctx pointer attributes: nonnull, align 8
         const ctx_param_index = @intFromEnum(Param.ctx);
@@ -227,7 +256,7 @@ const Assembler = struct {
         const sp_param = c.LLVMGetParam(@ptrCast(handler), sp_param_index);
         c.LLVMAddAttributeAtIndex(@ptrCast(handler), sp_param_index + 1, enumAttribute(ctx, nonnull, null));
         c.LLVMSetParamAlignment(sp_param, 8);
-        c.LLVMSetValueName2(fp_param, "sp", "sp".len);
+        c.LLVMSetValueName2(sp_param, "sp", "sp".len);
 
         // ctx pointer attributes: nonnull, align 8
         const ctx_param_index = @intFromEnum(Param.ctx);
@@ -281,7 +310,7 @@ const Assembler = struct {
         const sp_param = c.LLVMGetParam(@ptrCast(function), sp_param_index);
         c.LLVMAddAttributeAtIndex(@ptrCast(function), sp_param_index + 1, enumAttribute(self.ctx, nonnull, null));
         c.LLVMSetParamAlignment(sp_param, 8);
-        c.LLVMSetValueName2(fp_param, "sp", "sp".len);
+        c.LLVMSetValueName2(sp_param, "sp", "sp".len);
 
         // ctx pointer attributes: nonnull, align 8
         const ctx_param_index = @intFromEnum(Param.ctx);
@@ -389,6 +418,122 @@ const Assembler = struct {
         self.store(self.read(self.offset(1), .sext, "dst.reg"), not, .integer, "dst");
     }
 
+    fn Binary(comptime opcode: Builder.Opcode, comptime kind: Type.Kind) *const fn (*Assembler) error{}!void {
+        return struct {
+            fn generator(self: *Assembler) !void {
+                const src1 = self.load(self.read(self.offset(2), .sext, "src1.reg"), kind, "src1");
+                const src2 = self.load(self.read(self.offset(3), .sext, "src2.reg"), kind, "src2");
+                const inv = self.builder.binary(opcode, src1, src2, "binary");
+                self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, kind, "dst");
+            }
+        }.generator;
+    }
+
+    fn CompareInt(comptime predicate: Value.IntPredicate) *const fn (*Assembler) error{}!void {
+        return struct {
+            fn generator(self: *Assembler) !void {
+                const src1 = self.load(self.read(self.offset(2), .sext, "src1.reg"), .integer, "src1");
+                const src2 = self.load(self.read(self.offset(3), .sext, "src2.reg"), .integer, "src2");
+                const inv = self.builder.icmp(predicate, src1, src2, "binary");
+                self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, .integer, "dst");
+            }
+        }.generator;
+    }
+
+    fn CompareFloat(comptime predicate: Value.RealPredicate) *const fn (*Assembler) error{}!void {
+        return struct {
+            fn generator(self: *Assembler) !void {
+                const src1 = self.load(self.read(self.offset(2), .sext, "src1.reg"), .double, "src1");
+                const src2 = self.load(self.read(self.offset(3), .sext, "src2.reg"), .double, "src2");
+                const inv = self.builder.fcmp(predicate, src1, src2, "binary");
+                self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, .integer, "dst");
+            }
+        }.generator;
+    }
+
+    fn pushOne(self: *Assembler) !void {
+        const ip = self.param(.ip);
+        const fp = self.param(.fp);
+        var sp = self.param(.sp);
+        const ctx = self.param(.ctx);
+
+        const src = self.load(self.read(self.offset(1), .sext, "src.reg"), .integer, "src");
+        self.push(&sp, src);
+
+        // calculate pointer to the start of the next instruction
+        // and use it to read the opcode of the next instruction
+        const ip_offset = self.offset(2);
+        const next_ip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{ip_offset}, "ip.next");
+        self.tailArgs(next_ip, fp, sp, ctx);
+    }
+
+    fn pushMulti(self: *Assembler) !void {
+        const handler = self.module.getNamedFunction("interpreter_push_multi");
+        const ip = self.param(.ip);
+        const fp = self.param(.fp);
+        var sp = self.param(.sp);
+        const ctx = self.param(.ctx);
+
+        const entry_block = handler.entryBlock();
+        const body_block = BasicBlock.append(self.ctx, handler, "loop.body");
+        const cond_block = BasicBlock.append(self.ctx, handler, "loop.cond");
+        const exit_block = BasicBlock.append(self.ctx, handler, "loop.exit");
+
+        const count = self.read(self.offset(1), .zext, "count");
+        _ = self.builder.br(cond_block);
+        self.builder.positionAtEnd(cond_block);
+        const counter = self.builder.phi(self.ctx.int(64), "loop.counter");
+        const sp_phi = self.builder.phi(self.ctx.ptr(address_space), "sp");
+        c.LLVMAddIncoming(@ptrCast(sp_phi), @constCast(@ptrCast(&sp)), @constCast(@ptrCast(&entry_block)), 1);
+        sp = sp_phi;
+        self.builder.positionAtEnd(body_block);
+
+        const src_offset = self.builder.binary(.add, counter, self.iconst(2), "src.offset");
+        const src = self.load(self.read(src_offset, .sext, "src.reg"), .integer, "src");
+        self.push(&sp, src);
+        c.LLVMAddIncoming(@ptrCast(sp_phi), @constCast(@ptrCast(&sp)), @constCast(@ptrCast(&body_block)), 1);
+        const next_counter = self.builder.binary(.add, counter, self.iconst(1), "loop.counter.next");
+        _ = self.builder.br(cond_block);
+        self.builder.positionAtEnd(cond_block);
+
+        const zero = self.iconst(0);
+        c.LLVMAddIncoming(@ptrCast(counter), @constCast(@ptrCast(&zero)), @constCast(@ptrCast(&entry_block)), 1);
+        c.LLVMAddIncoming(@ptrCast(counter), @constCast(@ptrCast(&next_counter)), @constCast(@ptrCast(&body_block)), 1);
+
+        const cmp = self.builder.icmp(.ult, counter, count, "loop.cmp");
+        _ = self.builder.condBr(cmp, body_block, exit_block);
+        self.builder.positionAtEnd(exit_block);
+
+        // calculate pointer to the start of the next instruction
+        // and use it to read the opcode of the next instruction
+        const ip_offset = self.builder.binary(.add, self.offset(2), count, "ip.offset");
+        const next_ip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{ip_offset}, "ip.next");
+        self.tailArgs(next_ip, fp, sp_phi, ctx);
+    }
+
+    fn br(self: *Assembler) !void {
+        const handler = self.module.getNamedFunction("interpreter_br");
+        const then_block = BasicBlock.append(self.ctx, handler, "then");
+        const exit_block = BasicBlock.append(self.ctx, handler, "exit");
+
+        var cond = self.load(self.read(self.offset(1), .sext, "cond.reg"), .integer, "cond.int");
+        cond = self.builder.cast(.truncate, cond, self.ctx.int(1), "cond");
+        _ = self.builder.condBr(cond, then_block, exit_block);
+        self.builder.positionAtEnd(then_block);
+
+        const ip_offset = self.read(self.offset(2), .sext, "offset");
+        self.tail(ip_offset);
+        _ = self.builder.ret(null);
+        self.builder.positionAtEnd(exit_block);
+
+        self.tail(self.offset(3));
+    }
+
+    fn jmp(self: *Assembler) !void {
+        const ip_offset = self.read(self.offset(1), .sext, "offset");
+        self.tail(ip_offset);
+    }
+
     fn exit(self: *Assembler) !void {
         _ = self;
     }
@@ -399,7 +544,6 @@ const Assembler = struct {
         const sp = self.param(.sp);
         const ctx = self.param(.ctx);
 
-        // tail call the handler
         const args = .{ ip, fp, sp, ctx };
         const inner = self.module.getNamedFunction("interpreter_trap_inner");
         const handler_call = self.builder.call(handlerType(self.ctx), inner, &args, "");
@@ -417,6 +561,14 @@ const Assembler = struct {
 
     fn iconst(self: *Assembler, value: i64) *Value {
         return self.builder.iconst(self.ctx.int(64), @bitCast(value), true);
+    }
+
+    fn push(self: *Assembler, sp: **Value, val: *Value) void {
+        const store_inst = self.builder.store(val, sp.*);
+        c.LLVMSetAlignment(@ptrCast(store_inst), @alignOf(u64));
+
+        const one = self.iconst(1);
+        sp.* = self.builder.gep(.inbounds, self.ctx.int(64), sp.*, &.{one}, "sp.next");
     }
 
     const Extend = enum { none, zext, sext };
@@ -474,7 +626,13 @@ const Assembler = struct {
         // calculate pointer to the start of the next instruction
         // and use it to read the opcode of the next instruction
         const next_ip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{ip_offset}, "ip.next");
-        const next_opcode = self.builder.load(self.ctx.int(32), next_ip, "opcode.next");
+        self.tailArgs(next_ip, fp, sp, ctx);
+    }
+
+    fn tailArgs(self: *Assembler, ip: *Value, fp: *Value, sp: *Value, ctx: *Value) void {
+        // calculate pointer to the start of the next instruction
+        // and use it to read the opcode of the next instruction
+        const next_opcode = self.builder.load(self.ctx.int(32), ip, "opcode.next");
 
         // load the handler pointer from the jump table using the opcode
         const jump_table: *Value = @ptrCast(c.LLVMGetNamedGlobal(@ptrCast(self.module), jump_table_name));
@@ -482,7 +640,7 @@ const Assembler = struct {
         const handler = self.builder.load(self.ctx.ptr(address_space), handler_ptr, "handler");
 
         // tail call the handler
-        const args = .{ next_ip, fp, sp, ctx };
+        const args = .{ ip, fp, sp, ctx };
         const handler_call = self.builder.call(handlerType(self.ctx), handler, &args, "");
         c.LLVMSetTailCallKind(@ptrCast(handler_call), c.LLVMTailCallKindMustTail);
         c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMGHCCallConv);
@@ -803,6 +961,40 @@ test "tail call ir" {
         ;
         try std.testing.expectEqualSlices(u8, expected, actual);
     }
+}
+
+test "push ir" {
+    var assembler = try Assembler.init("interpreter");
+    const function_type = assembler.ctx.function(
+        assembler.ctx.void(),
+        &.{
+            assembler.ctx.ptr(Assembler.address_space), // ip
+            assembler.ctx.ptr(Assembler.address_space), // fp
+            assembler.ctx.ptr(Assembler.address_space), // sp
+            assembler.ctx.ptr(Assembler.address_space), // ctx
+        },
+        false,
+    );
+
+    const push = assembler.module.addFunction("push", function_type);
+    const entry = BasicBlock.append(assembler.ctx, push, "entry");
+    assembler.builder.positionAtEnd(entry);
+    var sp = assembler.param(.sp);
+    assembler.push(&sp, assembler.iconst(100));
+    assembler.push(&sp, assembler.iconst(200));
+
+    const actual = std.mem.span(push.printToString());
+    const expected =
+        \\define void @push(ptr %0, ptr %1, ptr %2, ptr %3) {
+        \\entry:
+        \\  store i64 100, ptr %2, align 8
+        \\  %sp.next = getelementptr inbounds i64, ptr %2, i64 1
+        \\  store i64 200, ptr %sp.next, align 8
+        \\  %sp.next1 = getelementptr inbounds i64, ptr %sp.next, i64 1
+        \\}
+        \\
+    ;
+    try std.testing.expectEqualSlices(u8, expected, actual);
 }
 
 pub fn main() !void {
