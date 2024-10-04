@@ -5,9 +5,9 @@ pub const Opcode = enum(u32) {
     ldw,
 
     // int to float
-    // itof,
+    itof,
     // float to int
-    // ftoi,
+    ftoi,
 
     // move (copy) register
     mov,
@@ -59,7 +59,7 @@ pub const Opcode = enum(u32) {
     // python function call
     // call,
     // runtime call
-    // callrt,
+    callrt,
 
     // jump by offset if register is true
     br,

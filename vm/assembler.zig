@@ -37,6 +37,8 @@ const Assembler = struct {
     const handlers = .{
         .{ .opcode = .ld, .words = 3, .generator = ld, .next = .default },
         .{ .opcode = .ldw, .words = 4, .generator = ldw, .next = .default },
+        .{ .opcode = .itof, .words = 3, .generator = itof, .next = .default },
+        .{ .opcode = .ftoi, .words = 3, .generator = ftoi, .next = .default },
         .{ .opcode = .mov, .words = 3, .generator = mov, .next = .default },
         .{ .opcode = .ineg, .words = 3, .generator = ineg, .next = .default },
         .{ .opcode = .fneg, .words = 3, .generator = fneg, .next = .default },
@@ -69,10 +71,22 @@ const Assembler = struct {
         .{ .opcode = .fge, .words = 4, .generator = CompareFloat(.oge), .next = .default },
         .{ .opcode = .push_one, .words = 2, .generator = pushOne, .next = .none },
         .{ .opcode = .push_multi, .words = 2, .generator = pushMulti, .next = .none },
+        .{ .opcode = .callrt, .words = 3, .generator = callrt, .next = .default },
         .{ .opcode = .br, .words = 3, .generator = br, .next = .none },
         .{ .opcode = .jmp, .words = 2, .generator = jmp, .next = .none },
         .{ .opcode = .exit, .words = 1, .generator = exit, .next = .none },
         .{ .opcode = .trap, .words = 1, .generator = trap, .next = .none },
+    };
+
+    pub const Builtin = enum(u32) {
+        print1_int,
+        print1_float,
+        print1_bool,
+        print1_str,
+
+        pub fn name(builtin: Builtin) []const u8 {
+            return "rt_" ++ @tagName(builtin);
+        }
     };
 
     comptime {
@@ -166,6 +180,20 @@ const Assembler = struct {
         };
 
         return ctx.function(ctx.void(), parameter_types, false);
+    }
+
+    fn builtinType(ctx: *Context, builtin: Builtin) *Type {
+        const ptr = ctx.ptr(address_space);
+        const int = ctx.int(64);
+        const float = ctx.float(.double);
+        const @"void" = ctx.void();
+
+        return switch (builtin) {
+            .print1_int => .{ .args = .{int}, .ret = @"void" },
+            .print1_float => .{ .args = .{float}, .ret = @"void" },
+            .print1_bool => .{ .args = .{int}, .ret = @"void" },
+            .print1_str => .{ .args = .{ptr}, .ret = @"void" },
+        };
     }
 
     fn declareHandler(ctx: *Context, module: *Module, ptr_size: usize, comptime opcode: Opcode, words: usize) void {
@@ -387,6 +415,18 @@ const Assembler = struct {
         self.store(self.read(self.offset(1), .sext, "dst.reg"), imm, .integer, "dst");
     }
 
+    fn itof(self: *Assembler) !void {
+        const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
+        const cast = self.builder.cast(.sitofp, src, self.ctx.float(.double), "itof");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), cast, .double, "dst");
+    }
+
+    fn ftoi(self: *Assembler) !void {
+        const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .double, "src");
+        const cast = self.builder.cast(.fptosi, src, self.ctx.int(64), "ftoi");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), cast, .integer, "dst");
+    }
+
     fn mov(self: *Assembler) !void {
         const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
         self.store(self.read(self.offset(1), .sext, "dst.reg"), src, .integer, "dst");
@@ -509,6 +549,13 @@ const Assembler = struct {
         const ip_offset = self.builder.binary(.add, self.offset(2), count, "ip.offset");
         const next_ip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{ip_offset}, "ip.next");
         self.tailArgs(next_ip, fp, sp_phi, ctx);
+    }
+
+    fn callrt(self: *Assembler) !void {
+        const builtin_index = self.read(self.offset(1), .none, "builtin.index");
+        const return_register = self.read(self.offset(2), .sext, "ret.reg");
+        _ = builtin_index;
+        _ = return_register;
     }
 
     fn br(self: *Assembler) !void {
@@ -644,6 +691,11 @@ const Assembler = struct {
         const handler_call = self.builder.call(handlerType(self.ctx), handler, &args, "");
         c.LLVMSetTailCallKind(@ptrCast(handler_call), c.LLVMTailCallKindMustTail);
         c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMGHCCallConv);
+    }
+
+    fn callBuiltin(self: *Assembler, comptime builtin: Builtin, args: []const *Value) *Value {
+        const callee = self.module.getNamedFunction(builtin.name());
+        self.builder.call(builtinType(self.ctx, builtin), callee, args, "");
     }
 
     pub fn finalize(self: *Assembler, bc_name: [:0]const u8) !void {

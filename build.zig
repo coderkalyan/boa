@@ -162,4 +162,18 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_vm_assembler_unit_tests.step);
     test_step.dependOn(&run_vm_unit_tests.step);
+
+    const vm_benchmark = b.addExecutable(.{
+        .name = "vm",
+        .root_source_file = b.path("vm/test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add the generated interpreter to the executable source.
+    vm_benchmark.addAssemblyFile(interpreter_s);
+
+    const run_vm_benchmark = b.addRunArtifact(vm_benchmark);
+    const run_vm_step = b.step("run-vm", "Run vm benchmark");
+    run_vm_step.dependOn(&run_vm_benchmark.step);
 }
