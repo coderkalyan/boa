@@ -105,7 +105,13 @@ pub const Opcode = enum(u32) {
     // float greater than equal
     fge,
 
+    // push multiple function args
+    pushargs,
+    // push single function arg
+    pusharg,
+
     // function call
+    call0,
     call1,
     call,
     // runtime call

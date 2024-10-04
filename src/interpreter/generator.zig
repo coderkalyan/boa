@@ -1,4 +1,5 @@
 const std = @import("std");
+const mvll = @import("mvll/root.zig");
 const BuiltinIndex = @import("builtins.zig").BuiltinIndex;
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
@@ -9,41 +10,33 @@ const c = @cImport({
     @cInclude("llvm-c/Target.h");
 });
 
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const Context = mvll.Context;
+const Module = mvll.Module;
+const Builder = mvll.Builder;
+const BasicBlock = mvll.BasicBlock;
+const Type = mvll.Type;
+const Value = mvll.Value;
+const Attribute = mvll.Attribute;
 const Error = Allocator.Error | Generator.Error;
 
 const Generator = struct {
-    context: Context,
-    module: Module,
-    builder: Builder,
+    ctx: *Context,
+    module: *Module,
+    builder: *Builder,
     target_machine: TargetMachine,
     target_data: TargetData,
-    // type of each wordcode atom
-    word_type: Type,
-    // type of array index
-    usize_type: Type,
-    // type of opaque pointer
-    ptr_type: Type,
-    // type of f64 (double precision float)
-    f64_type: Type,
-    // type of bool (u1)
-    bool_type: Type,
-    // type of bytecode handler function
-    handler_type: Type,
+    // type of bytecode handler
+    handler_type: *Type,
     // list of builtins
     builtins: []const Builtin,
 
-    const Context = c.LLVMContextRef;
-    const Module = c.LLVMModuleRef;
-    const Builder = c.LLVMBuilderRef;
-    const Type = c.LLVMTypeRef;
-    const Value = c.LLVMValueRef;
-    const Attribute = c.LLVMAttributeRef;
     const Target = c.LLVMTargetRef;
     const TargetMachine = c.LLVMTargetMachineRef;
     const TargetData = c.LLVMTargetDataRef;
-    const HandlerGeneratorFn = *const fn (self: *Generator) Generator.Error!Value;
-    const Builtin = struct { ty: Type, ptr: Value };
+    const HandlerGeneratorFn = *const fn (self: *Generator) Generator.Error!*Value;
+    const Builtin = struct { ty: *Type, ptr: *Value };
     const Error = error{
         WriteBitcodeFailed,
         VerifyIrFailed,
@@ -58,36 +51,30 @@ const Generator = struct {
     pub fn init(arena: Allocator, module_name: [:0]const u8) !Generator {
         if (c.LLVMInitializeNativeTarget() != 0) return error.TargetInitFailed;
 
-        const context = c.LLVMContextCreate();
-        errdefer c.LLVMContextDispose(context);
-        const module = c.LLVMModuleCreateWithNameInContext(module_name, context);
-        const builder = c.LLVMCreateBuilderInContext(context);
+        const ctx = Context.init();
+        errdefer ctx.deinit();
+        const module = Module.init(module_name, ctx);
+        errdefer module.deinit();
+        const builder = Builder.init(ctx);
+        errdefer builder.deinit();
 
         const target_triple = c.LLVMGetDefaultTargetTriple();
         const target = try getTargetFromTriple(target_triple);
         const target_machine = c.LLVMCreateTargetMachine(target, target_triple, "generic", "", c.LLVMCodeGenLevelAggressive, c.LLVMRelocDefault, c.LLVMCodeModelDefault);
         const target_data = c.LLVMCreateTargetDataLayout(target_machine);
 
-        const word_type = c.LLVMInt32TypeInContext(context);
-        const usize_type = c.LLVMIntPtrTypeInContext(context, target_data);
-        const ptr_type = c.LLVMPointerTypeInContext(context, address_space);
-        const f64_type = c.LLVMDoubleTypeInContext(context);
-        const bool_type = c.LLVMInt1TypeInContext(context);
-        const handler_type = handlerType(context);
+        // const usize_type = c.LLVMIntPtrTypeInContext(ctx, target_data);
+        // const ptr_type = c.LLVMPointerTypeInContext(ctx, address_space);
+        const handler_type = handlerType(ctx);
 
-        const builtins = try declareBuiltins(arena, context, module);
+        const builtins = try declareBuiltins(arena, ctx, module);
 
         return .{
-            .context = context,
+            .ctx = ctx,
             .module = module,
             .builder = builder,
             .target_machine = target_machine,
             .target_data = target_data,
-            .word_type = word_type,
-            .usize_type = usize_type,
-            .ptr_type = ptr_type,
-            .f64_type = f64_type,
-            .bool_type = bool_type,
             .handler_type = handler_type,
             .builtins = builtins,
         };
@@ -106,11 +93,11 @@ const Generator = struct {
         return target;
     }
 
-    fn declareBuiltins(arena: Allocator, context: Context, module: Module) ![]const Builtin {
-        const ptr_type = c.LLVMPointerTypeInContext(context, address_space);
-        const u32_type = c.LLVMInt32TypeInContext(context);
-        const u64_type = c.LLVMInt64TypeInContext(context);
-        const void_type = c.LLVMVoidTypeInContext(context);
+    fn declareBuiltins(arena: Allocator, ctx: *Context, module: *Module) ![]const Builtin {
+        const ptr_type = ctx.ptr(address_space);
+        const u32_type = ctx.int(32);
+        const u64_type = ctx.int(64);
+        const void_type = ctx.void();
 
         var builtins = std.ArrayList(Builtin).init(arena);
         const tvs = &.{
@@ -126,10 +113,10 @@ const Generator = struct {
         try builtins.ensureTotalCapacity(tvs.len);
         inline for (comptime std.meta.tags(BuiltinIndex), tvs) |tag, tv| {
             std.debug.assert(tag == tv[0]);
-            const ty = functionType(&tv[1], tv[2]);
+            const ty = ctx.function(tv[2], &tv[1], false);
             builtins.appendAssumeCapacity(.{
                 .ty = ty,
-                .ptr = c.LLVMAddFunction(module, "rt_" ++ @tagName(tag), ty),
+                .ptr = module.addFunction("rt_" ++ @tagName(tag), ty),
             });
         }
 
@@ -140,44 +127,24 @@ const Generator = struct {
         return self.builtins[@intFromEnum(index)];
     }
 
-    fn functionType(parameter_types: []const Type, return_type: Type) Type {
-        return c.LLVMFunctionType(
-            return_type,
-            @constCast(parameter_types.ptr),
-            @intCast(parameter_types.len),
-            0,
-        );
-    }
-
-    fn handlerType(context: Context) Type {
-        const parameter_types: []const Type = &.{
+    fn handlerType(ctx: *Context) *Type {
+        const parameter_types: []const *Type = &.{
             // instruction pointer to the current instruction
-            c.LLVMPointerTypeInContext(context, address_space),
+            ctx.ptr(address_space),
             // frame pointer to the base of the current stack frame
-            c.LLVMPointerTypeInContext(context, address_space),
+            ctx.ptr(address_space),
             // stack pointer to the top of the current stack frame
-            c.LLVMPointerTypeInContext(context, address_space),
+            ctx.ptr(address_space),
             // pointer to global interpreter context (shared across function calls)
-            c.LLVMPointerTypeInContext(context, address_space),
+            ctx.ptr(address_space),
         };
-        const return_type = c.LLVMVoidTypeInContext(context);
-        const function_type = c.LLVMFunctionType(
-            return_type,
-            @constCast(parameter_types.ptr),
-            @intCast(parameter_types.len),
-            0,
-        );
 
-        return function_type;
+        return ctx.function(ctx.void(), parameter_types, false);
     }
 
     fn addHandler(self: *Generator, comptime name: [:0]const u8, words: u32) !Value {
         // start by creating the base handler declaration
-        const handler = c.LLVMAddFunction(
-            self.module,
-            "interpreter_" ++ name,
-            self.handler_type,
-        );
+        const handler = self.module.addFunction("interpreter_" ++ name, self.handler_type);
 
         const non_null = "nonnull";
         const read_only = "readonly";
@@ -271,6 +238,9 @@ const Generator = struct {
             HandlerGenerator("fle", 4, BinaryFloatCompareHandler(c.LLVMRealOLE)),
             HandlerGenerator("ige", 4, BinaryIntCompareHandler(c.LLVMIntSGE)),
             HandlerGenerator("fge", 4, BinaryFloatCompareHandler(c.LLVMRealOGE)),
+            HandlerGenerator("pushargs", 3, pushargs),
+            HandlerGenerator("pusharg", 2, pusharg),
+            call0,
             call1,
             call,
             trap,
@@ -312,13 +282,13 @@ const Generator = struct {
         return struct {
             pub fn generator(self: *Generator) !Value {
                 const handler = try self.addHandler(name, words);
-                const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
-                c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+                const entry_block = BasicBlock.append(self.ctx, handler, "entry");
+                self.builder.positionAtEnd(entry_block);
 
                 try @call(.always_inline, body, .{self});
-
                 self.tailCallNext(words);
-                _ = c.LLVMBuildRetVoid(self.builder);
+                self.builder.ret(null);
+
                 return handler;
             }
         }.generator;
@@ -562,6 +532,49 @@ const Generator = struct {
         return handler;
     }
 
+    pub fn pushargs(self: *Generator) !void {
+        const insert_block = c.LLVMGetInsertBlock(self.builder);
+        const function = c.LLVMGetBasicBlockParent(insert_block);
+        const fp = self.param(fp_param_index);
+        const sp = self.param(sp_param_index);
+        const entry_block = insert_block;
+
+        const body_block = c.LLVMAppendBasicBlock(function, "loop.body");
+        const exit_block = c.LLVMAppendBasicBlock(function, "loop.exit");
+
+        const arg_count = self.read(1, .none, "arg.count");
+        _ = c.LLVMBuildBr(self.builder, body_block);
+        c.LLVMPositionBuilderAtEnd(self.builder, body_block);
+
+        var arg_offset = c.LLVMBuildPhi(self.builder, self.word_type, "arg.offset");
+        const two = self.iconst(self.word_type, 2, false);
+        c.LLVMAddIncoming(arg_offset, @constCast(&two), @constCast(&entry_block), 1);
+        var sp_offset = c.LLVMBuildPhi(self.builder, self.word_type, "sp.offset");
+        const zero = self.iconst(self.word_type, 0, false);
+        c.LLVMAddIncoming(sp_offset, @constCast(&zero), @constCast(&entry_block), 1);
+
+        const arg = self.loadBase(fp, arg_offset, "arg.load");
+        self.storeBase(sp, sp_offset, arg, "arg.push");
+        const one = self.iconst(self.word_type, 1, false);
+        const next_arg_offset = c.LLVMBuildAdd(self.builder, arg_offset, one, "arg.offset.next");
+        c.LLVMAddIncoming(arg_offset, @constCast(&next_arg_offset), @constCast(&body_block), 1);
+        arg_offset = next_arg_offset;
+        const next_sp_offset = c.LLVMBuildAdd(self.builder, sp_offset, one, "sp.offset.next");
+        c.LLVMAddIncoming(sp_offset, @constCast(&next_sp_offset), @constCast(&body_block), 1);
+        sp_offset = next_sp_offset;
+
+        const cmp = c.LLVMBuildICmp(self.builder, c.LLVMIntULT, sp_offset, arg_count, "count.ult");
+        _ = c.LLVMBuildCondBr(self.builder, cmp, body_block, exit_block);
+        c.LLVMPositionBuilderAtEnd(self.builder, exit_block);
+    }
+
+    pub fn pusharg(self: *Generator) !void {
+        const sp = self.param(sp_param_index);
+        const arg = self.loadOperand(1, "arg");
+        const offset = self.iconst(self.word_type, 0, false);
+        self.storeBase(sp, offset, arg, "arg.push");
+    }
+
     pub fn call1(self: *Generator) !Value {
         const handler = try self.addHandler("call1", 3);
         const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
@@ -590,6 +603,49 @@ const Generator = struct {
 
         // TODO: frame pointer should be stack pointer, and sp pushed further
         // fp = sp;
+
+        // call the runtime to evaluate the callable
+        const callable_int = self.loadOperand(1, "callable.int");
+        const callable = c.LLVMBuildIntToPtr(self.builder, callable_int, self.ptr_type, "callable");
+        const target = self.callRuntime(.eval_callable, &.{ ctx, callable, sp });
+        const two = c.LLVMConstInt(self.usize_type, 2, @intFromBool(false));
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&two), 1, "sp.next");
+
+        // tail call the target function
+        const poison = c.LLVMGetPoison(self.ptr_type);
+        const args: []const Value = &.{ poison, fp, sp, ctx };
+        const target_call = c.LLVMBuildCall2(self.builder, self.handler_type, target, @constCast(args.ptr), @intCast(args.len), "");
+        c.LLVMSetTailCallKind(target_call, c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(target_call, c.LLVMGHCCallConv);
+
+        _ = c.LLVMBuildRetVoid(self.builder);
+        return handler;
+    }
+
+    pub fn call0(self: *Generator) !Value {
+        const handler = try self.addHandler("call", 4);
+        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+        const ip = c.LLVMGetParam(handler, ip_param_index);
+        const fp = c.LLVMGetParam(handler, fp_param_index);
+        var sp = c.LLVMGetParam(handler, sp_param_index);
+        const ctx = c.LLVMGetParam(handler, ctx_param_index);
+
+        const ssp = sp;
+        // call the runtime to push arguments onto the stack
+        const arg_count = self.read(3, .zext, "arg.count");
+        const arg_offset = c.LLVMConstInt(self.usize_type, 4, @intFromBool(false));
+        const arg_start = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, ip, @constCast(&arg_offset), 1, "arg.start");
+        sp = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, sp, @constCast(&arg_count), 1, "sp.args");
+
+        // push saved ip, fp, and return register
+        const sip = c.LLVMBuildInBoundsGEP2(self.builder, self.word_type, arg_start, @constCast(&arg_count), 1, "sip");
+        const sfp = fp;
+        const return_reg = self.read(2, .sext, "ret.reg");
+        self.push(&sp, sip);
+        self.push(&sp, sfp);
+        self.push(&sp, ssp);
+        self.push(&sp, return_reg);
 
         // call the runtime to evaluate the callable
         const callable_int = self.loadOperand(1, "callable.int");
@@ -719,21 +775,21 @@ const Generator = struct {
 
     pub fn exit(self: *Generator) !Value {
         const handler = try self.addHandler("exit", 1);
-        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
-        _ = c.LLVMBuildRetVoid(self.builder);
+        const entry_block = self.ctx.append(handler, "entry");
+        self.builder.positionAtEnd(entry_block);
+        self.builder.ret(null);
         return handler;
     }
 
     pub fn trap(self: *Generator) !Value {
         const handler = try self.addHandler("exit", 1);
-        const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
-        c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
+        const entry_block = self.ctx.append(handler, "entry");
+        self.builder.positionAtEnd(entry_block);
 
-        const ip = c.LLVMGetParam(handler, ip_param_index);
-        const opcode = c.LLVMBuildLoad2(self.builder, self.word_type, ip, "opcode");
+        const ip = self.param(ip_param_index);
+        const opcode = self.builder.load(self.ctx.int(32), ip, "opcode");
         self.callRuntimeVoid(.trap, &.{opcode});
-        _ = c.LLVMBuildUnreachable(self.builder);
+        self.builder.@"unreachable"();
         return handler;
     }
 
@@ -765,7 +821,7 @@ const Generator = struct {
         offset: anytype,
         mode: ExtendMode,
         comptime name: [:0]const u8,
-    ) Value {
+    ) *Value {
         const ip = self.param(ip_param_index);
         const ptr_offset = switch (@TypeOf(offset)) {
             Value => offset,
@@ -778,27 +834,36 @@ const Generator = struct {
             name ++ ".ptr",
         );
 
-        const raw = c.LLVMBuildLoad2(self.builder, self.word_type, ptr, name ++ ".word");
+        const raw = self.builder.load(self.ctx.int(32), ptr, name ++ ".word");
         return switch (mode) {
             .none => raw,
-            .zext => c.LLVMBuildZExt(self.builder, raw, self.usize_type, name),
-            .sext => c.LLVMBuildSExt(self.builder, raw, self.usize_type, name),
+            .zext => self.builder.cast(.zext, raw, self.ctx.int(64), name),
+            .sext => self.builder.cast(.sext, raw, self.ctx.int(64), name),
         };
     }
 
-    fn load(self: *Generator, register: Value, comptime name: [:0]const u8) Value {
-        const fp = self.param(fp_param_index);
-        const stack_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, fp, @constCast(&register), 1, name ++ ".ptr");
+    fn loadBase(self: *Generator, base: Value, offset: Value, comptime name: [:0]const u8) Value {
+    const gep = self.builder.gep(self.ctx.int(64), )
+        const stack_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, base, @constCast(&offset), 1, name ++ ".ptr");
         const value = c.LLVMBuildLoad2(self.builder, self.usize_type, stack_gep, name);
         c.LLVMSetAlignment(value, @alignOf(u64));
         return value;
     }
 
-    fn store(self: *Generator, register: Value, value: Value, comptime name: [:0]const u8) void {
+    fn load(self: *Generator, register: Value, comptime name: [:0]const u8) Value {
         const fp = self.param(fp_param_index);
-        const stack_gep = c.LLVMBuildInBoundsGEP2(self.builder, self.usize_type, fp, @constCast(&register), 1, name ++ ".ptr");
+        return self.loadBase(fp, register, name);
+    }
+
+    fn storeBase(self: *Generator, base: Value, register: Value, value: Value, comptime name: [:0]const u8) void {
+        const stack_gep = self.gep(self.usize_type, base, &.{register}, name ++ ".ptr");
         const store_inst = c.LLVMBuildStore(self.builder, value, stack_gep);
         c.LLVMSetAlignment(store_inst, @alignOf(u64));
+    }
+
+    fn store(self: *Generator, register: Value, value: Value, comptime name: [:0]const u8) void {
+        const fp = self.param(fp_param_index);
+        self.storeBase(fp, register, value, name);
     }
 
     fn loadOperand(self: *Generator, comptime offset: u32, comptime name: [:0]const u8) Value {
@@ -957,4 +1022,16 @@ pub fn main() !void {
     var generator = try Generator.init(arena.allocator(), "interpreter");
     try generator.generate();
     try generator.finalize(args[1]);
+}
+
+test "foo" {
+    var generator = try Generator.init(testing.allocator, "interpreter");
+    const handler = try generator.addHandler("test", 0);
+    const entry_block = c.LLVMAppendBasicBlock(handler, "entry");
+    c.LLVMPositionBuilderAtEnd(generator.builder, entry_block);
+    _ = generator.read(0, .none, "opcode");
+    c.LLVMDumpModule(generator.module);
+    // c.LLVMPrintModuleToString(c.LLVM)
+    //
+    _ = mvll.Context.init();
 }

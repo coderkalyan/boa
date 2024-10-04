@@ -541,25 +541,30 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     switch (args.len) {
         1 => {
             self.code.appendSliceAssumeCapacity(&.{
-                .{ .opcode = .call1 },
+                .{ .opcode = .pusharg },
                 .{ .register = target },
                 .{ .register = dst },
             });
         },
         else => {
             self.code.appendSliceAssumeCapacity(&.{
-                .{ .opcode = .call },
-                .{ .register = target },
-                .{ .register = dst },
+                .{ .opcode = .pushargs },
                 .{ .count = @intCast(args.len) },
             });
+            for (args) |ir_arg| {
+                const arg = self.register_map.get(@enumFromInt(ir_arg)).?;
+                if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
+                self.code.appendAssumeCapacity(.{ .register = arg });
+            }
         },
     }
-    for (args) |ir_arg| {
-        const arg = self.register_map.get(@enumFromInt(ir_arg)).?;
-        if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
-        self.code.appendAssumeCapacity(.{ .register = arg });
-    }
+
+    self.code.appendSliceAssumeCapacity(&.{
+        .{ .opcode = .call0 },
+        .{ .register = target },
+        .{ .register = dst },
+        .{ .count = @intCast(args.len) },
+    });
 }
 
 fn expandBuiltin(self: *Assembler, inst: Ir.Index) !void {
