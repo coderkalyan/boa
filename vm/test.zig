@@ -47,6 +47,11 @@ fn allocTape(arena: Allocator, in_tape: anytype) ![]i32 {
     return out_tape;
 }
 
+inline fn ptrOffset(ptr: anytype, offset: comptime_int) @TypeOf(ptr) {
+    if (offset < 0) return ptr - @as(usize, -offset);
+    return ptr + offset;
+}
+
 fn runTest(arena: Allocator, comptime testcase: anytype) !void {
     const tape = try allocTape(arena, testcase.in_tape);
     const in_stack = try allocStack(arena, testcase.in_stack);
@@ -59,7 +64,7 @@ fn runTest(arena: Allocator, comptime testcase: anytype) !void {
 
     try std.testing.expectEqual(ip + testcase.offsets[0], trap_ip);
     try std.testing.expectEqual(fp + testcase.offsets[1], trap_fp);
-    try std.testing.expectEqual(sp + testcase.offsets[2], trap_sp);
+    try std.testing.expectEqual(ptrOffset(sp, testcase.offsets[2]), trap_sp);
     try std.testing.expectEqualSlices(i64, out_stack, in_stack);
 }
 
@@ -339,6 +344,34 @@ test "push_multi" {
         .frame_size = 4,
         .out_stack = .{ 100, 200, 300, 400, 200, 300, 100, 400, 0 },
         .offsets = .{ 6, 0, 4 },
+    });
+}
+
+test "pop_one" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{Opcode.pop_one},
+        .in_stack = .{ 100, 0, 0 },
+        .frame_size = 1,
+        .out_stack = .{ 100, 0, 0 },
+        .offsets = .{ 1, 0, -1 },
+    });
+}
+
+test "pop_multi" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, .{
+        .in_tape = .{ Opcode.pop_multi, 3 },
+        .in_stack = .{ 100, 100, 200, 300 },
+        .frame_size = 1,
+        .out_stack = .{ 100, 100, 200, 300 },
+        .offsets = .{ 2, 0, -3 },
     });
 }
 

@@ -34,6 +34,7 @@ const Assembler = struct {
     const HandlerGeneratorFn = *const fn (self: *Assembler) Error!*Value;
     const address_space = 0;
     const jump_table_name = "jump_table";
+    const builtin_table_name = "builtin_table_name";
     const handlers = .{
         .{ .opcode = .ld, .words = 3, .generator = ld, .next = .default },
         .{ .opcode = .ldw, .words = 4, .generator = ldw, .next = .default },
@@ -71,6 +72,8 @@ const Assembler = struct {
         .{ .opcode = .fge, .words = 4, .generator = CompareFloat(.oge), .next = .default },
         .{ .opcode = .push_one, .words = 2, .generator = pushOne, .next = .none },
         .{ .opcode = .push_multi, .words = 2, .generator = pushMulti, .next = .none },
+        .{ .opcode = .pop_one, .words = 2, .generator = popOne, .next = .none },
+        .{ .opcode = .pop_multi, .words = 2, .generator = popMulti, .next = .none },
         .{ .opcode = .callrt, .words = 3, .generator = callrt, .next = .default },
         .{ .opcode = .br, .words = 3, .generator = br, .next = .none },
         .{ .opcode = .jmp, .words = 2, .generator = jmp, .next = .none },
@@ -78,16 +81,23 @@ const Assembler = struct {
         .{ .opcode = .trap, .words = 1, .generator = trap, .next = .none },
     };
 
-    pub const Builtin = enum(u32) {
-        print1_int,
-        print1_float,
-        print1_bool,
-        print1_str,
-
-        pub fn name(builtin: Builtin) []const u8 {
-            return "rt_" ++ @tagName(builtin);
-        }
+    const builtins = .{
+        .{ .id = .print1_int, .args = .{.int}, .ret = .void },
+        .{ .id = .print1_float, .args = .{.float}, .ret = .void },
+        .{ .id = .print1_bool, .args = .{.int}, .ret = .void },
+        .{ .id = .print1_str, .args = .{.ptr}, .ret = .void },
     };
+
+    // pub const Builtin = enum(u32) {
+    //     print1_int,
+    //     print1_float,
+    //     print1_bool,
+    //     print1_str,
+    //
+    //     pub fn name(builtin: Builtin) [:0]const u8 {
+    //         return "rt_" ++ @tagName(builtin);
+    //     }
+    // };
 
     comptime {
         std.debug.assert(handlers.len == std.meta.tags(Opcode).len);
@@ -128,7 +138,12 @@ const Assembler = struct {
         const usize_type = c.LLVMIntPtrTypeInContext(@ptrCast(ctx), target_data);
         const ptr_size = c.LLVMABISizeOfType(target_data, @ptrCast(ctx.ptr(address_space)));
 
+        inline for (builtins) |builtin| {
+            declareBuiltin(ctx, module, builtin);
+        }
+
         declareJumpTable(ctx, module, handlers.len);
+        defineBuiltinTable(ctx, module, builtins.len);
         defineDefaultTrapInner(ctx, module, builder, ptr_size);
         inline for (handlers) |handler| {
             declareHandler(
@@ -182,18 +197,24 @@ const Assembler = struct {
         return ctx.function(ctx.void(), parameter_types, false);
     }
 
-    fn builtinType(ctx: *Context, builtin: Builtin) *Type {
-        const ptr = ctx.ptr(address_space);
-        const int = ctx.int(64);
-        const float = ctx.float(.double);
-        const @"void" = ctx.void();
-
-        return switch (builtin) {
-            .print1_int => .{ .args = .{int}, .ret = @"void" },
-            .print1_float => .{ .args = .{float}, .ret = @"void" },
-            .print1_bool => .{ .args = .{int}, .ret = @"void" },
-            .print1_str => .{ .args = .{ptr}, .ret = @"void" },
+    fn builtinTypeInner(ctx: *Context, kind: anytype) *Type {
+        return switch (kind) {
+            .int => ctx.int(64),
+            .float => ctx.float(.double),
+            .ptr => ctx.ptr(address_space),
+            .void => ctx.void(),
+            else => unreachable,
         };
+    }
+
+    fn builtinType(ctx: *Context, builtin: anytype) *Type {
+        var args = [_]*Type{undefined} ** builtin.args.len;
+        inline for (builtin.args, 0..) |arg, i| {
+            args[i] = builtinTypeInner(ctx, arg);
+        }
+
+        const ret = builtinTypeInner(ctx, builtin.ret);
+        return ctx.function(ret, &args, false);
     }
 
     fn declareHandler(ctx: *Context, module: *Module, ptr_size: usize, comptime opcode: Opcode, words: usize) void {
@@ -238,6 +259,62 @@ const Assembler = struct {
         c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMGHCCallConv);
     }
 
+    fn declareBuiltin(ctx: *Context, module: *Module, builder: *Builder, builtin: anytype) void {
+        // both these handlers are weakly linked to internal "no op" implementations
+        // to make testing easier
+
+        // direct call builtin
+        {
+            const builtin_type = builtinType(ctx, builtin);
+            const name = "rt_" ++ @tagName(builtin.id);
+            const handler = module.addFunction(name, builtin_type);
+            c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMCCallConv);
+
+            const entry_block = BasicBlock.append(ctx, handler, "entry");
+            builder.positionAtEnd(entry_block);
+        }
+
+        // indirect call (pops args from stack)
+        // {
+        //     const name = "rti_" ++ @tagName(builtin.id);
+        //     const handler = module.addFunction(name, handlerType(ctx));
+        //
+        //     const nonnull = "nonnull";
+        //     const readonly = "readonly";
+        //
+        //     // instruction pointer attributes: nonnull, readonly, dereferenceable(words), align 4
+        //     const ip_param_index = @intFromEnum(Param.ip);
+        //     const ip_param = handler.param(ip_param_index);
+        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), ip_param_index + 1, enumAttribute(ctx, nonnull, null));
+        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), ip_param_index + 1, enumAttribute(ctx, readonly, null));
+        //     c.LLVMSetParamAlignment(@ptrCast(ip_param), 4);
+        //     c.LLVMSetValueName2(@ptrCast(ip_param), "ip", "ip".len);
+        //
+        //     // frame pointer attributes: nonnull, align 8
+        //     const fp_param_index = @intFromEnum(Param.fp);
+        //     const fp_param = c.LLVMGetParam(@ptrCast(handler), fp_param_index);
+        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), fp_param_index + 1, enumAttribute(ctx, nonnull, null));
+        //     c.LLVMSetParamAlignment(fp_param, 8);
+        //     c.LLVMSetValueName2(fp_param, "fp", "fp".len);
+        //
+        //     // stack pointer attributes: nonnull, align 8
+        //     const sp_param_index = @intFromEnum(Param.sp);
+        //     const sp_param = c.LLVMGetParam(@ptrCast(handler), sp_param_index);
+        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), sp_param_index + 1, enumAttribute(ctx, nonnull, null));
+        //     c.LLVMSetParamAlignment(sp_param, 8);
+        //     c.LLVMSetValueName2(sp_param, "sp", "sp".len);
+        //
+        //     // ctx pointer attributes: nonnull, align 8
+        //     const ctx_param_index = @intFromEnum(Param.ctx);
+        //     const ctx_param = c.LLVMGetParam(@ptrCast(handler), ctx_param_index);
+        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), ctx_param_index + 1, enumAttribute(ctx, nonnull, null));
+        //     c.LLVMSetParamAlignment(ctx_param, 8);
+        //     c.LLVMSetValueName2(ctx_param, "ctx", "ctx".len);
+        //
+        //     c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMCCallConv);
+        // }
+    }
+
     fn enumAttribute(ctx: *Context, name: []const u8, val: ?u32) c.LLVMAttributeRef {
         return c.LLVMCreateEnumAttribute(
             @ptrCast(ctx),
@@ -251,6 +328,21 @@ const Assembler = struct {
         const jump_table = c.LLVMAddGlobal(@ptrCast(module), ty, jump_table_name);
         c.LLVMSetLinkage(jump_table, c.LLVMPrivateLinkage);
         c.LLVMSetUnnamedAddress(jump_table, c.LLVMLocalUnnamedAddr);
+    }
+
+    fn defineBuiltinTable(ctx: *Context, module: *Module, count: u32) void {
+        const ty = c.LLVMArrayType2(@ptrCast(ctx.ptr(address_space)), count);
+        const builtin_table = c.LLVMAddGlobal(@ptrCast(module), ty, builtin_table_name);
+        c.LLVMSetLinkage(builtin_table, c.LLVMPrivateLinkage);
+        c.LLVMSetUnnamedAddress(builtin_table, c.LLVMLocalUnnamedAddr);
+
+        var ptrs = [_]*Value{undefined} ** builtins.len;
+        inline for (builtins, 0..) |builtin, i| {
+            const name = "rt_" ++ @tagName(builtin.id);
+            ptrs[i] = module.getNamedFunction(name);
+        }
+        const initializer = c.LLVMConstArray2(@ptrCast(ctx.ptr(address_space)), @ptrCast(&ptrs), @intCast(ptrs.len));
+        c.LLVMSetInitializer(builtin_table, initializer);
     }
 
     fn defineDefaultTrapInner(ctx: *Context, module: *Module, builder: *Builder, ptr_size: usize) void {
@@ -551,10 +643,56 @@ const Assembler = struct {
         self.tailArgs(next_ip, fp, sp_phi, ctx);
     }
 
+    fn popOne(self: *Assembler) !void {
+        const ip = self.param(.ip);
+        const fp = self.param(.fp);
+        var sp = self.param(.sp);
+        const ctx = self.param(.ctx);
+
+        _ = self.pop(&sp, .integer);
+
+        // calculate pointer to the start of the next instruction
+        // and use it to read the opcode of the next instruction
+        const ip_offset = self.offset(1);
+        const next_ip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{ip_offset}, "ip.next");
+        self.tailArgs(next_ip, fp, sp, ctx);
+    }
+
+    fn popMulti(self: *Assembler) !void {
+        const ip = self.param(.ip);
+        const fp = self.param(.fp);
+        var sp = self.param(.sp);
+        const ctx = self.param(.ctx);
+
+        const count = self.read(self.offset(1), .zext, "pop.count");
+        sp = self.builder.gep(.inbounds, self.ctx.int(64), sp, &.{count}, "sp.next");
+        _ = self.pop(&sp, .integer);
+
+        // calculate pointer to the start of the next instruction
+        // and use it to read the opcode of the next instruction
+        const ip_offset = self.offset(2);
+        const next_ip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{ip_offset}, "ip.next");
+        self.tailArgs(next_ip, fp, sp, ctx);
+    }
+
     fn callrt(self: *Assembler) !void {
-        const builtin_index = self.read(self.offset(1), .none, "builtin.index");
+        const ip = self.param(.ip);
+        const fp = self.param(.fp);
+        const sp = self.param(.sp);
+        const ctx = self.param(.ctx);
+        const builtin_id = self.read(self.offset(1), .none, "builtin.id");
         const return_register = self.read(self.offset(2), .sext, "ret.reg");
-        _ = builtin_index;
+
+        // load the builtin pointer from the builtin table using the id
+        const builtin_table: *Value = @ptrCast(c.LLVMGetNamedGlobal(@ptrCast(self.module), builtin_table_name));
+        const builtin_ptr = self.builder.gep(.inbounds, self.ctx.ptr(address_space), builtin_table, &.{builtin_id}, "builtin.ptr");
+        const builtin = self.builder.load(self.ctx.ptr(address_space), builtin_ptr, "builtin");
+
+        // call the builtin handler
+        const args = .{ ip, fp, sp, ctx };
+        const handler_call = self.builder.call(handlerType(self.ctx), builtin, &args, "");
+        c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMCCallConv);
+
         _ = return_register;
     }
 
@@ -616,6 +754,20 @@ const Assembler = struct {
 
         const one = self.iconst(1);
         sp.* = self.builder.gep(.inbounds, self.ctx.int(64), sp.*, &.{one}, "sp.next");
+    }
+
+    fn pop(self: *Assembler, sp: **Value, comptime ty: Type.Kind) *Value {
+        const minus_one = self.iconst(-1);
+        sp.* = self.builder.gep(.inbounds, self.ctx.int(64), sp.*, &.{minus_one}, "sp.next");
+
+        const value = self.builder.load(self.ctx.int(64), sp.*, if (ty == .integer) "pop" else "pop.int");
+        c.LLVMSetAlignment(@ptrCast(value), @alignOf(u64));
+        return switch (ty) {
+            .integer => value,
+            .double => self.builder.cast(.bitcast, value, self.ctx.float(.double), "pop"),
+            .pointer => self.builder.cast(.inttoptr, value, self.ctx.ptr(address_space), "pop"),
+            else => unreachable,
+        };
     }
 
     const Extend = enum { none, zext, sext };
@@ -693,8 +845,9 @@ const Assembler = struct {
         c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMGHCCallConv);
     }
 
-    fn callBuiltin(self: *Assembler, comptime builtin: Builtin, args: []const *Value) *Value {
-        const callee = self.module.getNamedFunction(builtin.name());
+    fn callBuiltin(self: *Assembler, builtin: anytype, args: []const *Value) *Value {
+        const name = "rt_" ++ @tagName(builtin.id);
+        const callee = self.module.getNamedFunction(name);
         self.builder.call(builtinType(self.ctx, builtin), callee, args, "");
     }
 

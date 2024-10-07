@@ -55,6 +55,10 @@ pub const Opcode = enum(u32) {
     push_one,
     // push multiple arguments
     push_multi,
+    // pop a single argument
+    pop_one,
+    // pop multiple arguments
+    pop_multi,
 
     // python function call
     // call,
