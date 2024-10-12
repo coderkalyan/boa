@@ -14,8 +14,9 @@ const Shape = @import("rt/Shape.zig");
 const ConstantPool = @import("rt/ConstantPool.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
 // const builtins = @import("rt/builtins.zig");
-const builtins = @import("interpreter/builtins.zig");
-const builtins_impl = @import("rt/builtins_impl.zig");
+// const builtins = @import("interpreter/builtins.zig");
+// const builtins_impl = @import("rt/builtins_impl.zig");
+const builtins = @import("rt/builtins.zig");
 
 const posix = std.posix;
 const Node = Ast.Node;
@@ -72,22 +73,22 @@ pub fn main() !void {
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);
 
-    // {
-    //     const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-    //     // _ = ir_renderer;
-    //     var renderer = ir_renderer.init(writer, arena.allocator(), ir);
-    //     try renderer.render();
-    //     try buffered_out.flush();
-    // }
+    {
+        const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+        // _ = ir_renderer;
+        var renderer = ir_renderer.init(writer, arena.allocator(), ir);
+        try renderer.render();
+        try buffered_out.flush();
+    }
 
-    try writer.print("\n", .{});
+    // try writer.print("\n", .{});
 
-    var page_bump: PageBumpAllocator = .{};
-    const pba = page_bump.allocator();
-    var constant_pool = ConstantPool.init(gpa, pba);
+    // var page_bump: PageBumpAllocator = .{};
+    // const pba = page_bump.allocator();
+    // var constant_pool = ConstantPool.init(gpa, pba);
 
-    const bc_data = try Assembler.assemble(gpa, &pool, &constant_pool, ir);
-    const bc_index = try pool.createBytecode(bc_data);
+    // const bc_data = try Assembler.assemble(gpa, &pool, &constant_pool, ir);
+    // const bc_index = try pool.createBytecode(bc_data);
     // const bc = pool.bytecodePtr(bc_index);
     // {
     //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
@@ -97,17 +98,17 @@ pub fn main() !void {
     //     try buffered_out.flush();
     // }
 
-    const findex = try pool.createFunction(.{
-        .intern_pool = &pool,
-        .tree = &tree,
-        .node = module_node,
-        .lazy_ir = ir_index,
-        .lazy_bytecode = bc_index,
-        .return_type = .nonetype,
-    });
-    const ip = try pool.put(.{ .function = findex });
-
-    try interpret(gpa, &pool, &constant_pool, ip);
+    // const findex = try pool.createFunction(.{
+    //     .intern_pool = &pool,
+    //     .tree = &tree,
+    //     .node = module_node,
+    //     .lazy_ir = ir_index,
+    //     .lazy_bytecode = bc_index,
+    //     .return_type = .nonetype,
+    // });
+    // const ip = try pool.put(.{ .function = findex });
+    //
+    // try interpret(gpa, &pool, &constant_pool, ip);
 }
 
 pub fn interpret(
@@ -116,23 +117,27 @@ pub fn interpret(
     constant_pool: *ConstantPool,
     fi_ip: InternPool.Index,
 ) !void {
+    _ = gpa;
+    _ = pool;
     _ = constant_pool;
-    var page_bump: PageBumpAllocator = .{};
-    const pba = page_bump.allocator();
-
-    const shape_ptr = try pba.create(Shape);
-    shape_ptr.* = try Shape.init(pba);
-    const global = try Object.init(gpa, shape_ptr);
-    defer gpa.destroy(global);
-
-    const value_stack = try posix.mmap(
-        null,
-        value_stack_size,
-        posix.PROT.READ | posix.PROT.WRITE,
-        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-        -1,
-        0,
-    );
+    _ = fi_ip;
+    // _ = constant_pool;
+    // var page_bump: PageBumpAllocator = .{};
+    // const pba = page_bump.allocator();
+    //
+    // const shape_ptr = try pba.create(Shape);
+    // shape_ptr.* = try Shape.init(pba);
+    // const global = try Object.init(gpa, shape_ptr);
+    // defer gpa.destroy(global);
+    //
+    // const stack = try posix.mmap(
+    //     null,
+    //     value_stack_size,
+    //     posix.PROT.READ | posix.PROT.WRITE,
+    //     .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+    //     -1,
+    //     0,
+    // );
 
     // const call_stack = try posix.mmap(
     //     null,
@@ -143,31 +148,31 @@ pub fn interpret(
     //     0,
     // );
 
-    const pool_ptr: usize = @intFromPtr(pool);
-    const fi_ptr = @intFromPtr(pool.functionPtr(pool.get(fi_ip).function));
-    const entry_bc: Bytecode = .{
-        .register_count = 0,
-        .ic_count = 0,
-        .code = &.{
-            .{ .imm = @truncate(pool_ptr) }, // intern pool
-            .{ .imm = @truncate(pool_ptr >> 32) },
-            .{ .opcode = .ldw }, // ldw x0, fi_ptr
-            .{ .register = 0 },
-            .{ .imm = @truncate(fi_ptr) },
-            .{ .imm = @truncate(fi_ptr >> 32) },
-            // .{ .opcode = .callrt0 },
-            // .{ .imm = 0 },
-            .{ .opcode = .call }, // call x0, x0
-            .{ .register = 0 },
-            .{ .register = 0 },
-            .{ .count = 0 },
-            .{ .opcode = .exit },
-        },
-        .entry_pc = 2,
-    };
+    // const pool_ptr: usize = @intFromPtr(pool);
+    // const fi_ptr = @intFromPtr(pool.functionPtr(pool.get(fi_ip).function));
+    // const entry_bc: Bytecode = .{
+    //     .register_count = 0,
+    //     .ic_count = 0,
+    //     .code = &.{
+    //         .{ .imm = @truncate(pool_ptr) }, // intern pool
+    //         .{ .imm = @truncate(pool_ptr >> 32) },
+    //         .{ .opcode = .ldw }, // ldw x0, fi_ptr
+    //         .{ .register = 0 },
+    //         .{ .imm = @truncate(fi_ptr) },
+    //         .{ .imm = @truncate(fi_ptr >> 32) },
+    //         // .{ .opcode = .callrt0 },
+    //         // .{ .imm = 0 },
+    //         .{ .opcode = .call }, // call x0, x0
+    //         .{ .register = 0 },
+    //         .{ .register = 0 },
+    //         .{ .count = 0 },
+    //         .{ .opcode = .exit },
+    //     },
+    //     .entry_pc = 2,
+    // };
 
-    const ic_vector = try gpa.alloc(u32, 10);
-    @memset(ic_vector, std.math.maxInt(u32));
+    // const ic_vector = try gpa.alloc(u32, 10);
+    // @memset(ic_vector, std.math.maxInt(u32));
 
     // var context_frame: Interpreter.ContextFrame = .{
     //     .pba = &pba,
@@ -193,24 +198,26 @@ pub fn interpret(
     // stack[fp].ptr = &call_stack.ptr[0];
     // fp += 1;
     // stack[fp].int = 0;
-    const fp: [*]i64 = @ptrCast(value_stack.ptr);
-    const sp: [*]i64 = fp + 1;
-    const context: builtins.Context = .{
-        .pba = pba,
-        .global_object = global,
-    };
+    // const fp: [*]i64 = @ptrCast(value_stack.ptr);
+    // const sp: [*]i64 = fp + 1;
+    // const context: builtins.Context = .{
+    //     .pba = pba,
+    //     .global_object = global,
+    // };
 
-    interpreter_entry(@ptrCast(entry_bc.code.ptr + 2), fp, sp, &context);
-    std.debug.print("{x}\n", .{fp[0]});
+    // interpreter_entry(@ptrCast(entry_bc.code.ptr + 2), fp, sp, &context);
+    // std.debug.print("{x}\n", .{fp[0]});
 }
 
 comptime {
-    @export(builtins_impl.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });
-    @export(builtins_impl.evalCallable, .{ .name = "rt_eval_callable", .linkage = .strong });
-    @export(builtins_impl.trap, .{ .name = "rt_trap", .linkage = .strong });
-    @export(builtins_impl.attrIndexOrPanic, .{ .name = "rt_attr_index_or_panic", .linkage = .strong });
-    @export(builtins_impl.attrIndexOrInsert, .{ .name = "rt_attr_index_or_insert", .linkage = .strong });
-    @export(builtins_impl.loadIndex, .{ .name = "rt_load_index", .linkage = .strong });
-    @export(builtins_impl.storeIndex, .{ .name = "rt_store_index", .linkage = .strong });
-    @export(builtins_impl.pint, .{ .name = "rt_pint", .linkage = .strong });
+    @export(builtins.compile, .{ .name = "rt_compile", .linkage = .strong });
+    @export(builtins.attrIndex, .{ .name = "rt_attr_index", .linkage = .strong });
+    // @export(builtins_impl.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });
+    // @export(builtins_impl.evalCallable, .{ .name = "rt_eval_callable", .linkage = .strong });
+    // @export(builtins_impl.trap, .{ .name = "rt_trap", .linkage = .strong });
+    // @export(builtins_impl.attrIndexOrPanic, .{ .name = "rt_attr_index_or_panic", .linkage = .strong });
+    // @export(builtins_impl.attrIndexOrInsert, .{ .name = "rt_attr_index_or_insert", .linkage = .strong });
+    // @export(builtins_impl.loadIndex, .{ .name = "rt_load_index", .linkage = .strong });
+    // @export(builtins_impl.storeIndex, .{ .name = "rt_store_index", .linkage = .strong });
+    // @export(builtins_impl.pint, .{ .name = "rt_pint", .linkage = .strong });
 }

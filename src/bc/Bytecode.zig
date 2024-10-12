@@ -1,44 +1,34 @@
 const std = @import("std");
-const builtin = @import("builtin");
-const Ir = @import("../ir/Ir.zig");
-const InternPool = @import("../InternPool.zig");
 
-register_count: u32,
-ic_count: u32,
-code: []const Word,
-entry_pc: usize,
+frame_size: u32,
+code: []const i32,
 
-pub const List = std.ArrayListUnmanaged(Word);
-
-pub const Opcode = enum(u32) {
+pub const Opcode = enum(i32) {
     // load a 32 bit immediate into register
-    // .imm
     ld,
-    // load a constant pool entry into register
-    // .wimm,
-    // ldi,
+    // load a 64 bit immediate into register
     ldw,
 
-    // load the value of a global variable by identifier
-    // .ip
-    ldg,
-    // store a value in a global variable by identifier
-    // .unary_ip
-    stg,
-
-    // move from register to register
-    // .unary: src register
-    mov,
-
-    // type casting
-    // .unary: operand
     // int to float
     itof,
     // float to int
     ftoi,
 
-    // unary operations
-    // .unary: operand
+    // load an attribute from the global context, using an intern pool
+    // index (attribute name) as an opaque key
+    //
+    // calls runtime to query index of attribute, stores index
+    // and cache key (object shape) inline
+    ldg_init,
+    // guards against cache key, if incorrect resets to ldg_init
+    // else returns property access on object
+    ldg_fast,
+    // store a value to the global context - similar construction to above
+    stg_init,
+    stg_fast,
+
+    // move (copy) register
+    mov,
     // integer negation
     ineg,
     // float negation
@@ -49,112 +39,65 @@ pub const Opcode = enum(u32) {
     lnot,
 
     // binary operations
-    // .binary: (op1, op2)
-    // integer add
     iadd,
-    // float add
-    fadd,
-    // integer subtract
     isub,
-    // float subtract
-    fsub,
-    // integer multiply
     imul,
-    // float multiply
-    fmul,
-    // integer divide
     idiv,
-    // float divide
-    fdiv,
-    // integer modulo
     imod,
-    // float modulo
+
+    fadd,
+    fsub,
+    fmul,
+    fdiv,
     fmod,
-    // integer raise to power
-    ipow,
-    // float raise to power
-    fpow,
-    // bitwise or
+
     bor,
-    // bitwise and
     band,
-    // bitwise xor
     bxor,
-    // logical shift left
     sll,
-    // arithmetic shift right
     sra,
-    // integer equal
+
     ieq,
-    // integer not equal
     ine,
-    // integer less than
     ilt,
-    // float less than
-    flt,
-    // integer greater than
     igt,
-    // float greater than
-    fgt,
-    // integer less than equal
     ile,
-    // float less than equal
-    fle,
-    // integer greater than equal
     ige,
-    // float greater than equal
+
+    flt,
+    fgt,
+    fle,
     fge,
 
-    // push multiple function args
-    pushargs,
-    // push single function arg
-    pusharg,
+    // push a single argument in preparation of function or runtime call
+    push_one,
+    // push multiple arguments
+    push_multi,
+    // pop a single argument
+    pop_one,
+    // pop multiple arguments
+    pop_multi,
 
-    // function call
-    call0,
-    call1,
+    // python function call - multiple instructions here to track inline caching
+    //
+    // when executed, will dispatch runtime to check if function has not been compiled
+    // yet, and if not, compile IR and bytecode
+    // it will then update its own opcode to .call and run that, which avoids the compile
+    // guard on subsequent calls
+    call_lazy,
+    // call a function using the interpreter (fast path)
     call,
     // runtime call
-    callrt0,
-    callrt1,
     callrt,
 
-    // print type
-    pint,
-    pfloat,
-    pbool,
-    pstr,
-
-    // return the length of a string (constant time field lookup)
-    strlen,
-    // catenate (join) two strings
-    strcat,
-    // repeat a string
-    strrep,
-
-    // jump to index if register is true (1)
-    branch,
+    // jump by offset if register is true
+    br,
     // unconditionally jump to index
-    jump,
+    jmp,
     // return from a function call
-    ret,
+    // ret,
     // exit the interpreter
     exit,
-};
-
-pub const Register = i32;
-
-pub const Word = extern union {
-    opcode: Opcode,
-    register: Register,
-    imm: u32,
-    target: u32,
-    ip: InternPool.Index,
-    count: u32,
-
-    comptime {
-        if (builtin.mode != .Debug) {
-            std.debug.assert(@sizeOf(Word) == 4);
-        }
-    }
+    // trap the interpreter
+    trap,
 };

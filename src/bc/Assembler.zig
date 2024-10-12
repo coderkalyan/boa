@@ -5,11 +5,12 @@ const Bytecode = @import("Bytecode.zig");
 const PrePass = @import("PrePass.zig");
 const Liveness = @import("../ir/Liveness.zig");
 const ConstantPool = @import("../rt/ConstantPool.zig");
+const String = @import("../rt/string.zig").String;
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
 const Opcode = Bytecode.Opcode;
-const Register = Bytecode.Register;
+const Register = i32; //Bytecode.Register;
 
 const Assembler = @This();
 
@@ -17,10 +18,10 @@ gpa: Allocator,
 arena: Allocator,
 pool: *InternPool,
 ir: *const Ir,
-code: Bytecode.List,
+code: std.ArrayListUnmanaged(i32),
 register_count: u32,
-register_map: std.AutoHashMapUnmanaged(Ir.Index, Bytecode.Register),
-free_registers: std.ArrayListUnmanaged(Bytecode.Register),
+register_map: std.AutoHashMapUnmanaged(Ir.Index, i32),
+free_registers: std.ArrayListUnmanaged(i32),
 scratch: std.ArrayListUnmanaged(u32),
 order: []const Ir.BlockIndex,
 phis: []const std.ArrayListUnmanaged(PrePass.PhiMarker),
@@ -79,42 +80,15 @@ pub fn assemble(
         .constant_map = .{},
     };
 
-    const pool_ptr: usize = @intFromPtr(pool);
-    try assembler.code.appendSlice(assembler.gpa, &.{
-        .{ .imm = @truncate(pool_ptr) },
-        .{ .imm = @truncate(pool_ptr >> 32) },
-    });
-
-    // _ = try assembler.code.addOne(assembler.gpa);
-    // _ = try assembler.code.addOne(assembler.gpa);
-
     for (0..prepass.order.len) |i| {
         const current = prepass.order[i];
         const next = if (i == prepass.order.len - 1) undefined else prepass.order[i + 1];
         try assembler.generateBlock(current, next);
     }
 
-    const entry_pc: usize = 2;
-    // const constants = try assembler.constants.toOwnedSlice(assembler.gpa);
-    // const ptr: usize = @intFromPtr(constants.ptr);
-    // assembler.code.items[2] = .{ .imm = @truncate(ptr) };
-    // assembler.code.items[3] = .{ .imm = @truncate(ptr >> 32) };
-    // try assembler.code.ensureUnusedCapacity(assembler.gpa, assembler.constants.items.len * @sizeOf(usize) / @sizeOf(u32));
-    // for (assembler.constants.items) |item| {
-    //     const ptr = @intFromPtr(item);
-    //     std.debug.print("adding constant {x} at index {}\n", .{ ptr, entry_pc });
-    //     try assembler.code.appendSlice(assembler.gpa, entry_pc, &.{
-    //         .{ .imm = @truncate(ptr) },
-    //         .{ .imm = @truncate(ptr >> 32) },
-    //     });
-    //     entry_pc += 2;
-    // }
-
     return .{
-        .register_count = @intCast(assembler.register_count),
-        .ic_count = assembler.ic_count,
+        .frame_size = @intCast(assembler.register_count),
         .code = try assembler.code.toOwnedSlice(assembler.gpa),
-        .entry_pc = entry_pc,
     };
 }
 
@@ -314,128 +288,132 @@ fn elideInst(self: *Assembler, inst: Ir.Index) bool {
 const Immediate = union(enum) {
     none: void,
     bool: bool,
-    int: u32,
+    int: i32,
     float: f32,
 };
 
-fn addLd(self: *Assembler, dst: Register, imm: Immediate) !void {
-    var dest: u32 = undefined;
-    switch (imm) {
+fn addLd(self: *Assembler, dst: Register, in_imm: Immediate) !void {
+    var imm: i32 = undefined;
+    switch (in_imm) {
         .none => {},
-        .bool => |b| dest = @intFromBool(b),
-        .int => |i| dest = i,
-        .float => |f| @memcpy(asBytes(&dest), asBytes(&f)),
+        .bool => |b| imm = @intFromBool(b),
+        .int => |i| imm = i,
+        .float => |f| @memcpy(asBytes(&imm), asBytes(&f)),
     }
 
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .ld },
-        .{ .register = dst },
-        .{ .imm = dest },
+        @intFromEnum(Opcode.ld),
+        dst,
+        imm,
     });
 }
 
 fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
-    const gop = try self.constant_map.getOrPut(self.arena, ip);
-    if (!gop.found_existing) {
-        const ptr = try self.constant_pool.put(self.pool, ip);
-        const index: u32 = @intCast(self.constants.items.len);
-        try self.constants.append(self.gpa, ptr);
-        gop.value_ptr.* = index;
-    }
+    const pool = self.pool;
+    const val: i64 = switch (pool.get(ip)) {
+        .ty, .ir, .bytecode => unreachable,
+        .tv => |tv| switch (pool.get(tv.ty).ty) {
+            .nonetype => unreachable,
+            .int => tv.val.int,
+            .float => @bitCast(tv.val.float),
+            .bool => unreachable,
+            .str => unreachable, // implemented in .str TODO: change this?
+            .@"union", .any => unreachable, // TODO: unimplemented
+        },
+        // load a string literal from the intern pool and construct a string
+        // on the heap
+        // TODO: use page bump allocator
+        .str => |bytes| try String.init(self.gpa, bytes),
+        .function => |fi| pool.functionPtr(fi),
+    };
 
-    // TODO: clean this up
-    const ptr = @intFromPtr(self.constants.items[gop.value_ptr.*]);
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .ldw },
-        .{ .register = dst },
-        .{ .imm = @truncate(ptr) },
-        .{ .imm = @truncate(ptr >> 32) },
+        @intFromEnum(Opcode.ldw),
+        dst,
+        @truncate(val),
+        @truncate(val >> 32),
     });
 }
 
-fn addLdg(self: *Assembler, dst: Register, ip: InternPool.Index, ic: u32) !void {
+fn addLdg(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .ldg },
-        .{ .register = dst },
-        .{ .ip = ip },
-        .{ .count = ic },
+        @intFromEnum(Opcode.ldg_init),
+        dst,
+        @intFromEnum(ip),
+        undefined, // inline cache key (lower 32 bits of shape pointer)
+        undefined, // inline cache value (attribute index)
     });
 }
 
 fn addStg(self: *Assembler, src: Register, ip: InternPool.Index) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .stg },
-        .{ .register = src },
-        .{ .ip = ip },
+        @intFromEnum(Opcode.stg_init),
+        src,
+        @intFromEnum(ip),
+        undefined, // inline cache key (lower 32 bits of shape pointer)
+        undefined, // inline cache value (attribute index)
     });
 }
 
 fn addUnary(self: *Assembler, opcode: Opcode, dst: Register, src: Register) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = opcode },
-        .{ .register = dst },
-        .{ .register = src },
+        @intFromEnum(opcode),
+        dst,
+        src,
     });
 }
 
 fn addBinary(self: *Assembler, opcode: Opcode, dst: Register, src1: Register, src2: Register) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = opcode },
-        .{ .register = dst },
-        .{ .register = src1 },
-        .{ .register = src2 },
+        @intFromEnum(opcode),
+        dst,
+        src1,
+        src2,
     });
 }
 
-fn addPrint(self: *Assembler, opcode: Opcode, src: Register) !void {
+fn addJump(self: *Assembler, target: i32) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = opcode },
-        .{ .register = src },
+        @intFromEnum(Opcode.jmp),
+        target,
     });
 }
 
-fn addJump(self: *Assembler, target: u32) !void {
+fn addBranch(self: *Assembler, cond: Register, target: i32) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .jump },
-        .{ .target = target },
-    });
-}
-
-fn addBranch(self: *Assembler, cond: Register, target: u32) !void {
-    try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .branch },
-        .{ .register = cond },
-        .{ .target = target },
+        @intFromEnum(Opcode.br),
+        cond,
+        target,
     });
 }
 
 fn addRet(self: *Assembler, val: Register) !void {
     try self.code.appendSlice(self.gpa, &.{
-        .{ .opcode = .ret },
-        .{ .register = val },
+        @intFromEnum(Opcode.ret),
+        val,
     });
 }
 
 fn reserveJump(self: *Assembler) !u32 {
     const top: u32 = @intCast(self.code.items.len);
     const slot = try self.code.addManyAsSlice(self.gpa, 2);
-    slot[0] = .{ .opcode = .jump };
+    slot[0] = @intFromEnum(Opcode.jmp);
     return top;
 }
 
 fn reserveBranch(self: *Assembler, cond: Register) !u32 {
     const top: u32 = @intCast(self.code.items.len);
     const slot = try self.code.addManyAsSlice(self.gpa, 3);
-    slot[0] = .{ .opcode = .branch };
-    slot[1] = .{ .register = cond };
+    slot[0] = @intFromEnum(Opcode.br);
+    slot[1] = cond;
     return top;
 }
 
 fn reserveMov(self: *Assembler, src: Register) !u32 {
     const top: u32 = @intCast(self.code.items.len);
     const slot = try self.code.addManyAsSlice(self.gpa, 3);
-    slot[0] = .{ .opcode = .mov };
-    slot[2] = .{ .register = src };
+    slot[0] = @intFromEnum(Opcode.mov);
+    slot[2] = src;
     return top;
 }
 
