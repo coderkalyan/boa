@@ -11,7 +11,6 @@ const render = @import("render.zig");
 const Bytecode = @import("bc/Bytecode.zig");
 const Object = @import("rt/object.zig").Object;
 const Shape = @import("rt/Shape.zig");
-const ConstantPool = @import("rt/ConstantPool.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
 // const builtins = @import("rt/builtins.zig");
 // const builtins = @import("interpreter/builtins.zig");
@@ -81,22 +80,25 @@ pub fn main() !void {
         try buffered_out.flush();
     }
 
-    // try writer.print("\n", .{});
+    try writer.print("\n", .{});
 
     // var page_bump: PageBumpAllocator = .{};
     // const pba = page_bump.allocator();
     // var constant_pool = ConstantPool.init(gpa, pba);
 
-    // const bc_data = try Assembler.assemble(gpa, &pool, &constant_pool, ir);
-    // const bc_index = try pool.createBytecode(bc_data);
-    // const bc = pool.bytecodePtr(bc_index);
-    // {
-    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-    //     // _ = bytecode_renderer;
-    //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
-    //     try renderer.render();
-    //     try buffered_out.flush();
-    // }
+    const bc_data = try Assembler.assemble(gpa, &pool, ir);
+    const bc_index = try pool.createBytecode(bc_data);
+    const bc = pool.bytecodePtr(bc_index);
+    {
+        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+        // _ = bytecode_renderer;
+        var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
+        renderer.render() catch |err| {
+            try buffered_out.flush();
+            return err;
+        };
+        try buffered_out.flush();
+    }
 
     // const findex = try pool.createFunction(.{
     //     .intern_pool = &pool,
@@ -114,12 +116,10 @@ pub fn main() !void {
 pub fn interpret(
     gpa: Allocator,
     pool: *InternPool,
-    constant_pool: *ConstantPool,
     fi_ip: InternPool.Index,
 ) !void {
     _ = gpa;
     _ = pool;
-    _ = constant_pool;
     _ = fi_ip;
     // _ = constant_pool;
     // var page_bump: PageBumpAllocator = .{};
@@ -211,7 +211,10 @@ pub fn interpret(
 
 comptime {
     @export(builtins.compile, .{ .name = "rt_compile", .linkage = .strong });
+    @export(builtins.dispatch, .{ .name = "rt_dispatch", .linkage = .strong });
     @export(builtins.attrIndex, .{ .name = "rt_attr_index", .linkage = .strong });
+    @export(builtins.attrLoad, .{ .name = "rt_attr_load", .linkage = .strong });
+    @export(builtins.attrStore, .{ .name = "rt_attr_store", .linkage = .strong });
     // @export(builtins_impl.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });
     // @export(builtins_impl.evalCallable, .{ .name = "rt_eval_callable", .linkage = .strong });
     // @export(builtins_impl.trap, .{ .name = "rt_trap", .linkage = .strong });

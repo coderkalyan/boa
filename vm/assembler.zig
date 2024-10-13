@@ -23,7 +23,6 @@ const Type = mvll.Type;
 const Value = mvll.Value;
 const Target = mvll.Target;
 const TargetMachine = mvll.TargetMachine;
-const ContextStub = vm_test.ContextStub;
 const ObjectStub = vm_test.ObjectStub;
 
 pub const Assembler = struct {
@@ -82,11 +81,12 @@ pub const Assembler = struct {
         .{ .opcode = .push_multi, .words = 2, .generator = pushMulti, .next = .none },
         .{ .opcode = .pop_one, .words = 2, .generator = popOne, .next = .none },
         .{ .opcode = .pop_multi, .words = 2, .generator = popMulti, .next = .none },
-        .{ .opcode = .call_lazy, .words = 3, .generator = callLazy, .next = .none },
-        .{ .opcode = .call, .words = 3, .generator = call, .next = .default },
-        .{ .opcode = .callrt, .words = 3, .generator = callrt, .next = .default },
+        .{ .opcode = .call_init, .words = 3, .generator = callInit, .next = .none },
+        .{ .opcode = .call_fast, .words = 3, .generator = callFast, .next = .none },
+        .{ .opcode = .callrt, .words = 3, .generator = callrt, .next = .none },
         .{ .opcode = .br, .words = 3, .generator = br, .next = .none },
         .{ .opcode = .jmp, .words = 2, .generator = jmp, .next = .none },
+        .{ .opcode = .ret, .words = 2, .generator = ret, .next = .none },
         .{ .opcode = .exit, .words = 1, .generator = exit, .next = .none },
         .{ .opcode = .trap, .words = 1, .generator = trap, .next = .none },
     };
@@ -106,6 +106,73 @@ pub const Assembler = struct {
         ipool = 0,
         global = 1,
     };
+
+    const ContextLayout = struct {
+        ipool: *anyopaque,
+        global: *anyopaque,
+
+        const Field = enum(u32) {
+            ipool = 0,
+            global = 1,
+        };
+
+        pub fn structType(as: *Assembler) *Type {
+            const ctx = as.ctx;
+            const fields: []const *Type = &.{
+                ctx.ptr(address_space),
+                ctx.ptr(address_space),
+            };
+
+            const struct_type = c.LLVMStructTypeInContext(@ptrCast(ctx), @constCast(@ptrCast(fields.ptr)), @intCast(fields.len), @intFromBool(false));
+            return @ptrCast(struct_type);
+        }
+
+        pub fn fieldPtr(as: *Assembler, base: *Value, comptime field: Field) *Value {
+            const zero = as.builder.iconst(as.ctx.int(32), 0, false);
+            const field_index = as.builder.iconst(as.ctx.int(32), @intFromEnum(field), false);
+            return as.builder.gep(.inbounds, structType(as), base, &.{ zero, field_index }, @tagName(field) ++ ".ptr");
+        }
+    };
+
+    pub const FunctionInfoLayout = struct {
+        // tree: *anyopaque,
+        // ir: *anyopaque,
+        // bytecode: *anyopaque,
+        // node: u32,
+        // frame_size: u32,
+        // state: u32,
+
+        const Field = enum(u32) {
+            tree = 0,
+            ir = 1,
+            bytecode = 2,
+            node = 3,
+            frame_size = 4,
+            state = 5,
+        };
+
+        pub fn structType(as: *Assembler) *Type {
+            const ctx = as.ctx;
+            const fields: []const *Type = &.{
+                ctx.ptr(address_space),
+                ctx.ptr(address_space),
+                ctx.ptr(address_space),
+                ctx.int(32),
+                ctx.int(32),
+                ctx.int(32),
+            };
+
+            const struct_type = c.LLVMStructTypeInContext(@ptrCast(ctx), @constCast(@ptrCast(fields.ptr)), @intCast(fields.len), @intFromBool(false));
+            return @ptrCast(struct_type);
+        }
+
+        pub fn fieldPtr(as: *Assembler, base: *Value, comptime field: Field) *Value {
+            const zero = as.builder.iconst(as.ctx.int(32), 0, false);
+            const field_index = as.builder.iconst(as.ctx.int(32), @intFromEnum(field), false);
+            return as.builder.gep(.inbounds, structType(as), base, &.{ zero, field_index }, @tagName(field) ++ ".ptr");
+        }
+    };
+
     // pub const Builtin = enum(u32) {
     //     print1_int,
     //     print1_float,
@@ -246,8 +313,8 @@ pub const Assembler = struct {
             args[i] = builtinTypeInner(ctx, arg);
         }
 
-        const ret = builtinTypeInner(ctx, builtin.ret);
-        return ctx.function(ret, &args, false);
+        const return_type = builtinTypeInner(ctx, builtin.ret);
+        return ctx.function(return_type, &args, false);
     }
 
     fn dispatcherType(ctx: *Context) *Type {
@@ -602,14 +669,6 @@ pub const Assembler = struct {
         self.store(self.read(self.offset(1), .sext, "dst.reg"), cast, .integer, "dst");
     }
 
-    fn global(self: *Assembler) *Value {
-        const ctx = self.param(.ctx);
-        const global_offset = self.ptr_size / 8 * @intFromEnum(ContextFields.global);
-        const offset_const = self.builder.iconst(self.ctx.int(64), global_offset, false);
-        const global_ptr = self.builder.gep(.inbounds, self.ctx.ptr(address_space), ctx, &.{offset_const}, "global.ptr");
-        return self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
-    }
-
     fn ldgInit(self: *Assembler) !void {
         const ip = self.param(.ip);
         const fp = self.param(.fp);
@@ -617,7 +676,8 @@ pub const Assembler = struct {
         const ctx = self.param(.ctx);
 
         // load the global object from the context
-        const object = self.global();
+        const global_ptr = ContextLayout.fieldPtr(self, ctx, .global);
+        const object = self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
         const attr = self.read(self.offset(2), .none, "attr");
         const attr_int = self.builder.cast(.zext, attr, self.ctx.int(64), "attr.int");
 
@@ -656,7 +716,8 @@ pub const Assembler = struct {
         const ctx = self.param(.ctx);
 
         // load the global object from the context
-        const object = self.global();
+        const global_ptr = ContextLayout.fieldPtr(self, ctx, .global);
+        const object = self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
         const shape = self.builder.load(self.ctx.ptr(address_space), object, "shape");
         const shape_int = self.builder.cast(.ptrtoint, shape, self.ctx.int(64), "shape.int");
         const shape_trunc = self.builder.cast(.truncate, shape_int, self.ctx.int(32), "shape.trunc");
@@ -699,7 +760,8 @@ pub const Assembler = struct {
         const ctx = self.param(.ctx);
 
         // load the global object from the context
-        const object = self.global();
+        const global_ptr = ContextLayout.fieldPtr(self, ctx, .global);
+        const object = self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
         const attr = self.read(self.offset(2), .none, "attr");
         const attr_int = self.builder.cast(.zext, attr, self.ctx.int(64), "attr.int");
 
@@ -738,7 +800,8 @@ pub const Assembler = struct {
         const ctx = self.param(.ctx);
 
         // load the global object from the context
-        const object = self.global();
+        const global_ptr = ContextLayout.fieldPtr(self, ctx, .global);
+        const object = self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
         const shape = self.builder.load(self.ctx.ptr(address_space), object, "shape");
         const shape_int = self.builder.cast(.ptrtoint, shape, self.ctx.int(64), "shape.int");
         const shape_trunc = self.builder.cast(.truncate, shape_int, self.ctx.int(32), "shape.trunc");
@@ -930,40 +993,62 @@ pub const Assembler = struct {
         self.tailArgs(next_ip, fp, sp, ctx);
     }
 
-    fn callLazy(self: *Assembler) !void {
+    fn callInit(self: *Assembler) !void {
         const ip = self.param(.ip);
+        const fp = self.param(.fp);
+        const sp = self.param(.sp);
         const ctx = self.param(.ctx);
-        const function = self.load(self.read(self.offset(1), .sext, "function.reg"), .pointer, "function");
 
+        // compile the function if needed (lazily)
+        const function = self.load(self.read(self.offset(1), .sext, "function.reg"), .pointer, "function");
         const rtCompile = .{ .id = .compile, .args = .{ .ptr, .ptr }, .ret = .void };
         _ = self.callBuiltin(rtCompile, &.{ ctx, function });
-        // update the opcode to cache the result here and not repeat work
-        // TODO: a cache key is needed, most likely something based on the ir
-        const new_opcode = self.builder.iconst(self.ctx.int(32), @intFromEnum(Opcode.call), false);
-        _ = self.builder.store(new_opcode, ip);
 
-        // since we modified the current opcode, we just call the same "instruction"
-        // without offset
-        self.tail(self.offset(0));
+        // update the opcode so we don't compile again, using the
+        // function info pointer (lower 32 bits) as an inline cache key
+        const function_int = self.builder.cast(.ptrtoint, function, self.ctx.int(64), "function.int");
+        const key = self.builder.cast(.truncate, function_int, self.ctx.int(32), "ic.key.val");
+        const key_ptr = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{self.offset(3)}, "ic.key.ptr");
+        _ = self.builder.store(key, key_ptr);
+
+        const opcode_ptr = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{self.offset(0)}, "opcode.ptr");
+        const opcode = self.builder.iconst(self.ctx.int(32), @intFromEnum(Opcode.call_fast), false);
+        _ = self.builder.store(opcode, opcode_ptr);
+
+        const handler = self.module.getNamedFunction("interpreter_call_fast");
+        const args = .{ ip, fp, sp, ctx };
+        const handler_call = self.builder.call(handlerType(self.ctx), handler, &args, "");
+        c.LLVMSetTailCallKind(@ptrCast(handler_call), c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMGHCCallConv);
     }
 
-    fn call(self: *Assembler) !void {
-        // const ip = self.param(.ip);
-        // const fp = self.param(.fp);
-        // const sp = self.param(.sp);
-        // const ctx = self.param(.ctx);
+    fn callFast(self: *Assembler) !void {
+        const ip = self.param(.ip);
+        var fp = self.param(.fp);
+        var sp = self.param(.sp);
+        const ctx = self.param(.ctx);
 
-        // const callee = self.load(self.read(self.offset(1), .zext, "callee.reg"), "callee");
-        // const return_register = self.read(self.offset(2), .sext, "ret.reg");
+        // TODO: branch back to init if key doesn't match
+        const function = self.load(self.read(self.offset(1), .sext, "function.reg"), .pointer, "function");
+        // push the saved ip, fp, and sp
+        const sip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{self.offset(4)}, "sip");
+        const ssp = sp;
+        self.push(&sp, sip);
+        self.push(&sp, fp);
+        self.push(&sp, ssp);
+        // push the return register so the ret instruction can populate it
+        const return_reg = self.read(self.offset(2), .sext, "ret.reg");
+        self.push(&sp, return_reg);
+        // update the frame pointer to the current stack pointer
+        fp = sp;
+        // and update the stack pointer by the size of the frame
+        const frame_size_ptr = FunctionInfoLayout.fieldPtr(self, function, .frame_size);
+        const frame_size = self.builder.load(self.ctx.int(32), frame_size_ptr, "frame_size");
+        sp = self.builder.gep(.inbounds, self.ctx.int(64), sp, &.{frame_size}, "sp.next");
 
-        // call the runtime dispatcher
-        // const args = .{ builtin_id, fp, sp, ctx };
-        // const dispatcher = self.module.getNamedFunction("rt_dispatch");
-        // const handler_call = self.builder.call(dispatcherType(self.ctx), dispatcher, &args, "");
-        // c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMCCallConv);
-        _ = self;
-
-        // _ = return_register;
+        const bytecode_ptr = FunctionInfoLayout.fieldPtr(self, function, .bytecode);
+        const bytecode = self.builder.load(self.ctx.ptr(address_space), bytecode_ptr, "bytecode");
+        self.tailArgs(bytecode, fp, sp, ctx);
     }
 
     fn callrt(self: *Assembler) !void {
@@ -1003,6 +1088,27 @@ pub const Assembler = struct {
     fn jmp(self: *Assembler) !void {
         const ip_offset = self.read(self.offset(1), .sext, "offset");
         self.tail(ip_offset);
+    }
+
+    fn ret(self: *Assembler) !void {
+        var fp = self.param(.fp);
+        var sp = self.param(.sp);
+        const ctx = self.param(.ctx);
+
+        // pop the current frame (local variables)
+        sp = fp;
+        // pop the return register
+        const dst = self.pop(&sp, .integer);
+        // pop the saved ip, fp, and sp
+        const saved_sp = self.pop(&sp, .pointer);
+        fp = self.pop(&sp, .pointer);
+        const ip = self.pop(&sp, .pointer);
+        // populate the return register (using the caller's frame pointer not ours)
+        const src = self.load(self.read(self.offset(1), .sext, "src.reg"), .integer, "src");
+        self.storeBase(fp, dst, src, .integer, "ret");
+
+        // tail call the parent
+        self.tailArgs(ip, fp, saved_sp, ctx);
     }
 
     fn exit(self: *Assembler) !void {

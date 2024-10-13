@@ -4,13 +4,14 @@ const Ir = @import("../ir/Ir.zig");
 const Bytecode = @import("Bytecode.zig");
 const PrePass = @import("PrePass.zig");
 const Liveness = @import("../ir/Liveness.zig");
-const ConstantPool = @import("../rt/ConstantPool.zig");
 const String = @import("../rt/string.zig").String;
+const types = @import("../rt/types.zig");
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
 const Opcode = Bytecode.Opcode;
 const Register = i32; //Bytecode.Register;
+const FunctionInfo = types.FunctionInfo;
 
 const Assembler = @This();
 
@@ -28,8 +29,6 @@ phis: []const std.ArrayListUnmanaged(PrePass.PhiMarker),
 ranges: []const Ir.Index,
 patch: []std.ArrayListUnmanaged(Patch),
 block_starts: std.AutoHashMapUnmanaged(Ir.BlockIndex, u32),
-ic_count: u32,
-constant_pool: *ConstantPool,
 constants: std.ArrayListUnmanaged(*anyopaque),
 constant_map: std.AutoHashMapUnmanaged(InternPool.Index, u32),
 
@@ -46,7 +45,6 @@ const Slot = struct {
 pub fn assemble(
     gpa: Allocator,
     pool: *InternPool,
-    constant_pool: *ConstantPool,
     ir: *const Ir,
 ) !Bytecode {
     var arena_allocator = std.heap.ArenaAllocator.init(gpa);
@@ -74,8 +72,6 @@ pub fn assemble(
         .ranges = prepass.ranges,
         .patch = patch,
         .block_starts = .{},
-        .ic_count = 0,
-        .constant_pool = constant_pool,
         .constants = .{},
         .constant_map = .{},
     };
@@ -203,12 +199,13 @@ fn markPatch(self: *Assembler, current_block: Ir.BlockIndex, target_block: Ir.Bl
 fn patchInst(self: *Assembler, current_block: Ir.BlockIndex, loc: u32, patch: Patch) !void {
     const ir = self.ir;
     const payload = ir.instPayload(patch.ir_inst);
+    const offset = @as(i32, @intCast(loc)) - @as(i32, @intCast(patch.bc_inst));
     switch (ir.instTag(patch.ir_inst)) {
-        .jmp => self.updateJump(patch.bc_inst, loc - patch.bc_inst),
+        .jmp => self.updateJump(patch.bc_inst, offset),
         .br => {
             const branch = ir.extraData(Ir.Inst.Branch, payload.unary_extra.extra);
             if (branch.exec_if == current_block) {
-                self.updateBranch(patch.bc_inst, loc - patch.bc_inst);
+                self.updateBranch(patch.bc_inst, offset);
             }
         },
         .phi => {
@@ -323,8 +320,32 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
         // load a string literal from the intern pool and construct a string
         // on the heap
         // TODO: use page bump allocator
-        .str => |bytes| try String.init(self.gpa, bytes),
-        .function => |fi| pool.functionPtr(fi),
+        .str => |bytes| @bitCast(@intFromPtr(try String.init(self.gpa, bytes))),
+        // TODO: this should happen at "runtime" through callrt
+        .function => |fi| ptr: {
+            const function = pool.functionPtr(fi);
+            const state: FunctionInfo.State = switch (function.state) {
+                .lazy => .lazy,
+                .interpreted => .interpreted,
+                .optimized_lite => .optimized_lite,
+                .optimized_full => .optimized_full,
+            };
+            const ir = if (function.state == .lazy) undefined else pool.irPtr(function.ir);
+            const bytecode = if (function.state == .lazy) undefined else pool.bytecodePtr(function.bytecode).code.ptr;
+            const frame_size = if (function.state == .lazy) undefined else pool.bytecodePtr(function.bytecode).frame_size;
+
+            const function_info = try self.gpa.create(FunctionInfo);
+            function_info.* = .{
+                .state = state,
+                .node = function.node,
+                .tree = function.tree,
+                .ir = ir,
+                .bytecode = bytecode,
+                .frame_size = frame_size,
+            };
+
+            break :ptr @bitCast(@intFromPtr(function_info));
+        },
     };
 
     try self.code.appendSlice(self.gpa, &.{
@@ -339,7 +360,7 @@ fn addLdg(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
     try self.code.appendSlice(self.gpa, &.{
         @intFromEnum(Opcode.ldg_init),
         dst,
-        @intFromEnum(ip),
+        @bitCast(@intFromEnum(ip)),
         undefined, // inline cache key (lower 32 bits of shape pointer)
         undefined, // inline cache value (attribute index)
     });
@@ -349,7 +370,7 @@ fn addStg(self: *Assembler, src: Register, ip: InternPool.Index) !void {
     try self.code.appendSlice(self.gpa, &.{
         @intFromEnum(Opcode.stg_init),
         src,
-        @intFromEnum(ip),
+        @bitCast(@intFromEnum(ip)),
         undefined, // inline cache key (lower 32 bits of shape pointer)
         undefined, // inline cache value (attribute index)
     });
@@ -387,11 +408,54 @@ fn addBranch(self: *Assembler, cond: Register, target: i32) !void {
     });
 }
 
-fn addRet(self: *Assembler, val: Register) !void {
+fn addPush(self: *Assembler, args: []const Register) !void {
+    switch (args.len) {
+        0 => {},
+        1 => {
+            try self.code.appendSlice(self.gpa, &.{
+                @intFromEnum(Opcode.push_one),
+                @intCast(args[0]),
+            });
+        },
+        else => {
+            try self.code.ensureUnusedCapacity(self.gpa, args.len + 2);
+            self.code.appendSliceAssumeCapacity(&.{
+                @intFromEnum(Opcode.push_multi),
+                @intCast(args.len),
+            });
+            self.code.appendSliceAssumeCapacity(args);
+        },
+    }
+}
+
+fn addPop(self: *Assembler, len: usize) !void {
+    switch (len) {
+        0 => {},
+        1 => try self.code.append(self.gpa, @intFromEnum(Opcode.pop_one)),
+        else => try self.code.appendSlice(self.gpa, &.{
+            @intFromEnum(Opcode.pop_multi),
+            @intCast(len),
+        }),
+    }
+}
+
+fn addCall(self: *Assembler, target: Register, dst: Register) !void {
     try self.code.appendSlice(self.gpa, &.{
-        @intFromEnum(Opcode.ret),
-        val,
+        @intFromEnum(Opcode.call_init),
+        target,
+        dst,
+        0, // cache key for function info
     });
+}
+
+fn addRet(self: *Assembler, val: Register) !void {
+    _ = self;
+    _ = val;
+    // TODO: implement
+    // try self.code.appendSlice(self.gpa, &.{
+    //     @intFromEnum(Opcode.ret),
+    //     val,
+    // });
 }
 
 fn reserveJump(self: *Assembler) !u32 {
@@ -417,16 +481,16 @@ fn reserveMov(self: *Assembler, src: Register) !u32 {
     return top;
 }
 
-fn updateJump(self: *const Assembler, slot: u32, target: u32) void {
-    self.code.items[slot + 1] = .{ .target = target };
+fn updateJump(self: *const Assembler, slot: u32, target: i32) void {
+    self.code.items[slot + 1] = target;
 }
 
-fn updateBranch(self: *const Assembler, slot: u32, target: u32) void {
-    self.code.items[slot + 2] = .{ .target = target };
+fn updateBranch(self: *const Assembler, slot: u32, target: i32) void {
+    self.code.items[slot + 2] = target;
 }
 
 fn updateMov(self: *const Assembler, slot: u32, dst: Register) void {
-    self.code.items[slot + 1] = .{ .register = dst };
+    self.code.items[slot + 1] = dst;
 }
 
 fn constant(self: *Assembler, inst: Ir.Index) !void {
@@ -473,8 +537,7 @@ fn ldGlobal(self: *Assembler, inst: Ir.Index) !void {
     const ip = self.ir.instPayload(inst).ip;
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
-    try self.addLdg(dst, ip, self.ic_count);
-    self.ic_count += 1;
+    try self.addLdg(dst, ip);
 }
 
 fn stGlobal(self: *Assembler, inst: Ir.Index) !void {
@@ -516,33 +579,9 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     try self.register_map.put(self.arena, inst, dst);
 
     try self.code.ensureUnusedCapacity(self.gpa, 4 + args.len);
-    switch (args.len) {
-        1 => {
-            self.code.appendSliceAssumeCapacity(&.{
-                .{ .opcode = .pusharg },
-                .{ .register = target },
-                .{ .register = dst },
-            });
-        },
-        else => {
-            self.code.appendSliceAssumeCapacity(&.{
-                .{ .opcode = .pushargs },
-                .{ .count = @intCast(args.len) },
-            });
-            for (args) |ir_arg| {
-                const arg = self.register_map.get(@enumFromInt(ir_arg)).?;
-                if (self.rangeEnd(ptr) == inst) self.deallocate(arg);
-                self.code.appendAssumeCapacity(.{ .register = arg });
-            }
-        },
-    }
-
-    self.code.appendSliceAssumeCapacity(&.{
-        .{ .opcode = .call0 },
-        .{ .register = target },
-        .{ .register = dst },
-        .{ .count = @intCast(args.len) },
-    });
+    try self.addPush(@ptrCast(args));
+    try self.addCall(target, dst);
+    try self.addPop(args.len);
 }
 
 fn expandBuiltin(self: *Assembler, inst: Ir.Index) !void {
@@ -571,10 +610,11 @@ fn builtinPrint(self: *Assembler, inst: Ir.Index) !void {
 
         const opcode: Opcode = switch (ty) {
             .nonetype => unreachable, // TODO: unimplemented
-            .int => .pint,
-            .float => .pfloat,
-            .bool => .pfloat,
-            .str => .pstr,
+            // TODO: all unimplemented
+            // .int => .pint,
+            // .float => .pfloat,
+            // .bool => .pfloat,
+            // .str => .pstr,
             else => unreachable,
         };
         try self.addPrint(opcode, operand);
@@ -595,7 +635,9 @@ fn builtinLen(self: *Assembler, inst: Ir.Index) !void {
 
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
-    try self.addUnary(.strlen, dst, operand);
+    // TODO: implement
+    unreachable;
+    // try self.addUnary(.strlen, dst, operand);
 }
 
 fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
@@ -608,7 +650,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             .mul => .imul,
             .div => .idiv,
             .mod => .imod,
-            .pow => .ipow,
+            // .pow => .ipow,
             .band => .band,
             .bor => .bor,
             .bxor => .bxor,
@@ -628,7 +670,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             .mul => .fmul,
             .div => .fdiv,
             .mod => .fmod,
-            .pow => .fpow,
+            // .pow => .fpow,
             .eq, .ne => unreachable,
             .lt => .flt,
             .gt => .fgt,
@@ -637,8 +679,8 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             else => unreachable,
         },
         .str => switch (self.ir.instTag(inst)) {
-            .add => .strcat,
-            .mul => .strrep,
+            // .add => .strcat,
+            // .mul => .strrep,
             else => unreachable,
         },
         else => unreachable,

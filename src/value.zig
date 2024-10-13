@@ -6,7 +6,7 @@ const Item = InternPool.Item;
 
 pub const Value = union(enum) {
     none: void,
-    int: u64,
+    int: i64,
     float: f64,
     bool: bool,
 

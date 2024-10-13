@@ -84,9 +84,9 @@ pub const Opcode = enum(i32) {
     // yet, and if not, compile IR and bytecode
     // it will then update its own opcode to .call and run that, which avoids the compile
     // guard on subsequent calls
-    call_lazy,
+    call_init,
     // call a function using the interpreter (fast path)
-    call,
+    call_fast,
     // runtime call
     callrt,
 
@@ -95,7 +95,7 @@ pub const Opcode = enum(i32) {
     // unconditionally jump to index
     jmp,
     // return from a function call
-    // ret,
+    ret,
     // exit the interpreter
     exit,
     // trap the interpreter

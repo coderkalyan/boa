@@ -12,6 +12,14 @@ const Object = @import("object.zig").Object;
 const Context = types.Context;
 const FunctionInfo = types.FunctionInfo;
 
+export fn dispatch(id: u32, fp: [*]i64, sp: [*]i64, ctx: *anyopaque) callconv(.C) void {
+    // _ = id;
+    // _ = fp;
+    // _ = sp;
+    _ = ctx;
+    std.debug.print("dispatch! {} {*} {*}\n", .{ id, fp, sp });
+}
+
 pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
     if (fi.state != .lazy) return;
 
@@ -20,7 +28,7 @@ pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
     const ir_index = ipool.createIr(ir_data) catch unreachable;
     fi.ir = ipool.irPtr(ir_index);
 
-    const bc_data = Assembler.assemble(ctx.gpa, ipool, ctx.cpool, fi.ir) catch unreachable;
+    const bc_data = Assembler.assemble(ctx.gpa, ipool, fi.ir) catch unreachable;
     const bc_index = ipool.createBytecode(bc_data) catch unreachable;
     // TODO: this needs to be fixed
     fi.bytecode = ipool.bytecodePtr(bc_index).code.ptr;
@@ -36,15 +44,16 @@ pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
     fi.state = .interpreted;
 }
 
-pub fn attrIndex(object: *Object, in_attr: u64) i64 {
-    const attr: InternPool.Index = @enumFromInt(@as(i32, @truncate(in_attr)));
-    return object.shape.get(attr) orelse -1;
+pub fn attrIndex(object: *Object, in_attr: u64) callconv(.C) i64 {
+    const attr: InternPool.Index = @enumFromInt(@as(u32, @truncate(in_attr)));
+    if (object.shape.get(attr)) |index| return @intCast(index);
+    return -1;
 }
 
-pub fn attrLoad(object: *Object, index: u64) i64 {
+pub fn attrLoad(object: *Object, index: u64) callconv(.C) i64 {
     return object.attributes.items[index];
 }
 
-pub fn attrStore(object: *Object, index: u64, val: i64) void {
+pub fn attrStore(object: *Object, index: u64, val: i64) callconv(.C) void {
     object.attributes.items[index] = val;
 }

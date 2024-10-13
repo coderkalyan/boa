@@ -657,7 +657,7 @@ fn integerLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const integer_str = ig.tree.tokenString(integer_token);
 
     const val = parseIntegerLiteral(integer_str);
-    const ip = try ig.pool.put(.{ .tv = .{ .ty = .int, .val = .{ .int = val } } });
+    const ip = try ig.pool.put(.{ .tv = .{ .ty = .int, .val = .{ .int = @intCast(val) } } });
     return ig.current_builder.constant(ip);
 }
 
@@ -999,12 +999,12 @@ fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     var return_type: InternPool.Index = .any;
     if (signature.ret != .null) return_type = try ig.typeExpr(scope, signature.ret);
     const findex = try ig.pool.createFunction(.{
-        .intern_pool = ig.pool,
         .tree = ig.tree,
         .node = node,
-        .lazy_ir = null,
-        .lazy_bytecode = null,
         .return_type = return_type,
+        .ir = undefined,
+        .bytecode = undefined,
+        .state = .lazy,
     });
     const ip = try ig.pool.put(.{ .function = findex });
 

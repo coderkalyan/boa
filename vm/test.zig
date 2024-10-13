@@ -1,9 +1,19 @@
 const std = @import("std");
 const Bytecode = @import("Bytecode.zig");
+const Assembler = @import("assembler.zig").Assembler;
 // const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const Opcode = Bytecode.Opcode;
+
+pub const FunctionInfoLayout = struct {
+    tree: *anyopaque,
+    ir: *anyopaque,
+    bytecode: *anyopaque,
+    node: u32,
+    frame_size: u32,
+    state: u32,
+};
 
 pub const ContextStub = extern struct {
     ipool: *anyopaque,
@@ -13,7 +23,6 @@ pub const ContextStub = extern struct {
 pub const ObjectStub = extern struct {
     shape: *anyopaque,
 };
-// const FunctionInfo = types.FunctionInfo;
 
 var trap_ip: [*]i32 = undefined;
 var trap_fp: [*]i64 = undefined;
@@ -66,7 +75,7 @@ fn allocStack(arena: Allocator, in_stack: anytype) ![]i64 {
     inline for (in_stack, 0..) |val, i| {
         out_stack[i] = switch (@TypeOf(val)) {
             comptime_int, i64 => val,
-            u64 => @bitCast(val),
+            u64, usize => @bitCast(val),
             comptime_float => @bitCast(@as(f64, val)),
             f64 => @bitCast(val),
             else => unreachable,
@@ -107,6 +116,11 @@ fn runTest(arena: Allocator, ctx: *ContextStub, comptime testcase: anytype) !voi
     const tape = try allocTape(arena, ctx, testcase.in_tape);
     const in_stack = try allocStack(arena, testcase.in_stack);
     const out_stack = try allocStack(arena, testcase.out_stack);
+
+    // trap_ip = undefined;
+    // trap_fp = undefined;
+    // trap_sp = undefined;
+    // trap_ctx = undefined;
 
     const ip = tape.ptr;
     const fp = in_stack.ptr;
@@ -549,39 +563,139 @@ test "pop_multi" {
     });
 }
 
-test "callrt" {
+test "call_init" {
     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
 
-    try runTest(arena, undefined, .{
-        .in_tape = .{ Opcode.callrt, 0, 0 },
-        .in_stack = .{ 100, 100, 200, 300 },
-        .frame_size = 1,
-        .out_stack = .{ 100, 100, 200, 300 },
-        .offsets = .{ 3, 0, 0 },
-    });
+    const inner_tape = try allocTape(arena, undefined, .{Opcode.trap});
+    var function_info: FunctionInfoLayout = .{
+        .tree = undefined,
+        .ir = undefined,
+        .bytecode = inner_tape.ptr,
+        .node = undefined,
+        .frame_size = 2,
+        .state = 1,
+    };
+
+    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, Opcode.trap });
+    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 200, 300 };
+    const outer_frame_size = 1;
+
+    const stack = try allocStack(arena, in_stack);
+
+    const ip = outer_tape.ptr;
+    const fp = stack.ptr;
+    const sp = fp + outer_frame_size;
+    interpreter_entry(ip, fp, sp, undefined);
+
+    try std.testing.expectEqual(inner_tape.ptr, trap_ip);
+    try std.testing.expectEqual(fp + 5, trap_fp);
+    try std.testing.expectEqual(fp + 7, trap_sp);
+    try std.testing.expectEqual(@intFromEnum(Opcode.call_fast), outer_tape[0]);
 }
 
-// test "call_lazy" {
+test "call_fast" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const inner_tape = try allocTape(arena, undefined, .{Opcode.trap});
+    var function_info: FunctionInfoLayout = .{
+        .tree = undefined,
+        .ir = undefined,
+        .bytecode = inner_tape.ptr,
+        .node = undefined,
+        .frame_size = 2,
+        .state = 1,
+    };
+
+    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_fast, 0, 0, 0, Opcode.trap });
+    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 100, 200, 300 };
+    const outer_frame_size = 1;
+
+    const stack = try allocStack(arena, in_stack);
+
+    const ip = outer_tape.ptr;
+    const fp = stack.ptr;
+    const sp = fp + outer_frame_size;
+    interpreter_entry(ip, fp, sp, undefined);
+
+    try std.testing.expectEqual(inner_tape.ptr, trap_ip);
+    try std.testing.expectEqual(fp + 5, trap_fp);
+    try std.testing.expectEqual(fp + 7, trap_sp);
+    try std.testing.expectEqual(0, stack[4]);
+}
+
+test "ret" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, 1 });
+    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_fast, 0, 0, 0, Opcode.trap });
+    const in_stack = .{ 0, 0, 0, 0, 0, 200, 300 };
+    const outer_frame_size = 1;
+
+    const stack = try allocStack(arena, in_stack);
+    stack[1] = @bitCast(@intFromPtr(outer_tape.ptr + 4));
+    stack[2] = @bitCast(@intFromPtr(stack.ptr));
+    stack[3] = @bitCast(@intFromPtr(stack.ptr + outer_frame_size));
+
+    const ip = inner_tape.ptr;
+    const fp = stack.ptr + 5;
+    const sp = stack.ptr + 7;
+    interpreter_entry(ip, fp, sp, undefined);
+
+    // TODO: this should actually save the next ip
+    try std.testing.expectEqual(outer_tape.ptr + 4, trap_ip);
+    try std.testing.expectEqual(stack.ptr, trap_fp);
+    try std.testing.expectEqual(stack.ptr + outer_frame_size, trap_sp);
+    try std.testing.expectEqual(300, stack[0]);
+}
+
+test "call and return no args" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, 0 });
+    var function_info: FunctionInfoLayout = .{
+        .tree = undefined,
+        .ir = undefined,
+        .bytecode = inner_tape.ptr,
+        .node = undefined,
+        .frame_size = 1,
+        .state = 1,
+    };
+
+    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, 0, Opcode.trap });
+    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
+    const outer_frame_size = 1;
+
+    const stack = try allocStack(arena, in_stack);
+
+    const ip = outer_tape.ptr;
+    const fp = stack.ptr;
+    const sp = fp + outer_frame_size;
+    interpreter_entry(ip, fp, sp, undefined);
+
+    try std.testing.expectEqual(ip + 4, trap_ip);
+    try std.testing.expectEqual(fp, trap_fp);
+    try std.testing.expectEqual(sp, trap_sp);
+    try std.testing.expectEqual(200, stack[0]);
+}
+
+// test "callrt" {
 //     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena_allocator.deinit();
 //     const arena = arena_allocator.allocator();
 //
-//     var fi: FunctionInfo = .{
-//         .state = .interpreted,
-//         .node = undefined,
-//         .tree = undefined,
-//         .ir = undefined,
-//         .bytecode = undefined,
-//     };
-//
-//     const ptr: i64 = @bitCast(@intFromPtr(&fi));
 //     try runTest(arena, undefined, .{
-//         .in_tape = .{ Opcode.call_lazy, 0, 0 },
-//         .in_stack = .{ptr},
+//         .in_tape = .{ Opcode.callrt, 0, 0 },
+//         .in_stack = .{ 100, 100, 200, 300 },
 //         .frame_size = 1,
-//         .out_stack = .{ptr},
+//         .out_stack = .{ 100, 100, 200, 300 },
 //         .offsets = .{ 3, 0, 0 },
 //     });
 // }
@@ -597,15 +711,36 @@ pub fn main() !void {
         .global = &global,
     };
 
-    const tape = try allocTape(arena, &context, .{ Opcode.ldg_fast, 0, 2, .ctx, 2 });
-    const in_stack = try allocStack(arena, undefined, .{0});
+    const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, 0 });
+    var function_info: FunctionInfoLayout = .{
+        .tree = undefined,
+        .ir = undefined,
+        .bytecode = inner_tape.ptr,
+        .node = undefined,
+        .frame_size = 1,
+        .state = 1,
+    };
 
-    const ip = tape.ptr;
-    const fp = in_stack.ptr;
-    const sp = fp + 1;
-    const ctx = &context;
+    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, Opcode.trap });
+    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
+    const outer_frame_size = 1;
+
+    const stack = try allocStack(arena, in_stack);
+
+    const ip = outer_tape.ptr;
+    const fp = stack.ptr;
+    const sp = fp + outer_frame_size;
+    interpreter_entry(ip, fp, sp, &context);
+
+    // const tape = try allocTape(arena, &context, .{ Opcode.ldg_fast, 0, 2, .ctx, 2 });
+    // const in_stack = try allocStack(arena, undefined, .{0});
+    //
+    // const ip = tape.ptr;
+    // const fp = in_stack.ptr;
+    // const sp = fp + 1;
+    // const ctx = &context;
 
     // for (0..100_000) |_| {
-    interpreter_entry(ip, fp, sp, ctx);
+    // interpreter_entry(ip, fp, sp, ctx);
     // }
 }

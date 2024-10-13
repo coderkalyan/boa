@@ -384,13 +384,13 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
         }
 
         pub fn render(self: *Self) !void {
-            var pc: u32 = @intCast(self.bc.entry_pc);
+            var pc: u32 = 0;
             while (pc < self.bc.code.len) {
                 pc = try self.renderInst(pc);
             }
         }
 
-        fn readWord(self: *Self, pc: *u32) Bytecode.Word {
+        fn readWord(self: *Self, pc: *u32) i32 {
             const word = self.bc.code[pc.*];
             pc.* += 1;
             return word;
@@ -401,42 +401,38 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
             const writer = self.stream.writer();
             var pc = in_pc;
 
-            const opcode = code[pc].opcode;
+            const opcode: Bytecode.Opcode = @enumFromInt(code[pc]);
             pc += 1;
 
             try writer.print("{} {s} ", .{ pc - 1, @tagName(opcode) });
             switch (opcode) {
                 .ld => {
-                    const dst = self.readWord(&pc).register;
-                    const imm = self.readWord(&pc).imm;
+                    const dst = self.readWord(&pc);
+                    const imm = self.readWord(&pc);
 
                     const int: u32 = @bitCast(imm);
                     const float: f32 = @bitCast(imm);
                     try writer.print("x{}, 0x{x:0>8} ({})\n", .{ dst, int, float });
                 },
                 .ldw => {
-                    const dst = self.readWord(&pc).register;
-                    const lower = self.readWord(&pc).imm;
-                    const upper = self.readWord(&pc).imm;
+                    const dst = self.readWord(&pc);
+                    const lower: u32 = @bitCast(self.readWord(&pc));
+                    const upper: u32 = @bitCast(self.readWord(&pc));
 
                     const imm = lower | (@as(u64, upper) << 32);
-                    try writer.print("x{}, 0x{x:0>8}\n", .{ dst, imm });
+                    try writer.print("x{}, 0x{x:0>16}\n", .{ dst, imm });
                 },
-                .callrt0, .callrt1, .callrt => unreachable,
-                // .ldi => {
-                //     const dst = self.readWord(&pc).register;
-                //     const ip = self.readWord(&pc).ip;
-                //     try writer.print("x{}, ", .{dst});
-                //     try self.pool.print(writer, ip);
-                //     try writer.print("\n", .{});
-                // },
-                .pint,
-                .pfloat,
-                .pbool,
-                .pstr,
+                .ldg_init,
+                .ldg_fast,
+                .stg_init,
+                .stg_fast,
                 => {
-                    const src = self.readWord(&pc).register;
-                    try writer.print("x{}\n", .{src});
+                    const src = self.readWord(&pc);
+                    const ip = self.readWord(&pc);
+                    try writer.print("x{}, ", .{src});
+                    try self.pool.print(writer, @enumFromInt(ip));
+                    try writer.print("\n", .{});
+                    pc += 2;
                 },
                 .ineg,
                 .fneg,
@@ -445,38 +441,23 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .mov,
                 .itof,
                 .ftoi,
-                .strlen,
                 => {
-                    const dst = self.readWord(&pc).register;
-                    const op = self.readWord(&pc).register;
+                    const dst = self.readWord(&pc);
+                    const op = self.readWord(&pc);
                     try writer.print("x{}, x{}\n", .{ dst, op });
                 },
-                .branch => {
-                    const condition = self.readWord(&pc).register;
-                    const target = self.readWord(&pc).target;
-                    const absolute = pc - 3 + target;
+                .br => {
+                    const condition = self.readWord(&pc);
+                    const target = self.readWord(&pc);
+                    const absolute = target;
+                    // const absolute = pc - 3 + target;
                     try writer.print("x{}, +{} ({})\n", .{ condition, target, absolute });
                 },
-                .jump => {
-                    const target = self.readWord(&pc).target;
+                .jmp => {
+                    const target = self.readWord(&pc);
                     try writer.print("{}\n", .{target});
                 },
                 .exit => try writer.print("\n", .{}),
-                .ldg => {
-                    const dst = self.readWord(&pc).register;
-                    const ip = self.readWord(&pc).ip;
-                    _ = self.readWord(&pc); // ic index
-                    try writer.print("x{}, ", .{dst});
-                    try self.pool.print(writer, ip);
-                    try writer.print("\n", .{});
-                },
-                .stg => {
-                    const src = self.readWord(&pc).register;
-                    const ip = self.readWord(&pc).ip;
-                    try writer.print("x{}, ", .{src});
-                    try self.pool.print(writer, ip);
-                    try writer.print("\n", .{});
-                },
                 .iadd,
                 .fadd,
                 .isub,
@@ -487,8 +468,6 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .fdiv,
                 .imod,
                 .fmod,
-                .ipow,
-                .fpow,
                 .bor,
                 .band,
                 .bxor,
@@ -504,56 +483,41 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                 .fle,
                 .ige,
                 .fge,
-                .strcat,
-                .strrep,
                 => {
-                    const dst = self.readWord(&pc).register;
-                    const op1 = self.readWord(&pc).register;
-                    const op2 = self.readWord(&pc).register;
+                    const dst = self.readWord(&pc);
+                    const op1 = self.readWord(&pc);
+                    const op2 = self.readWord(&pc);
                     try writer.print("x{}, x{}, x{}\n", .{ dst, op1, op2 });
                 },
-                .call1 => {
-                    const target = self.readWord(&pc).register;
-                    const ret = self.readWord(&pc).register;
-                    try writer.print("x{}, x{}", .{ target, ret });
-                    const arg = self.readWord(&pc).register;
-                    try writer.print(", x{}", .{arg});
-                    try writer.print("\n", .{});
+                .call_init, .call_fast => {
+                    const target = self.readWord(&pc);
+                    const ret = self.readWord(&pc);
+                    try writer.print("x{}, x{}\n", .{ target, ret });
+                    pc += 1;
                 },
-                .call => {
-                    const target = self.readWord(&pc).register;
-                    const ret = self.readWord(&pc).register;
-                    const count = self.readWord(&pc).count;
-                    try writer.print("x{}, x{}", .{ target, ret });
-                    for (0..count) |_| {
-                        const arg = self.readWord(&pc).register;
-                        try writer.print(", x{}", .{arg});
-                    }
-                    try writer.print("\n", .{});
+                .push_one => {
+                    const arg = self.readWord(&pc);
+                    try writer.print("x{}\n", .{arg});
                 },
-                .call0 => {
-                    const target = self.readWord(&pc).register;
-                    const ret = self.readWord(&pc).register;
-                    const count = self.readWord(&pc).count;
-                    try writer.print("x{}, x{}, {}\n", .{ target, ret, count });
-                },
-                .pushargs => {
-                    const count = self.readWord(&pc).count;
+                .push_multi => {
+                    const count: u32 = @intCast(self.readWord(&pc));
                     for (0..count) |i| {
-                        const arg = self.readWord(&pc).register;
+                        const arg = self.readWord(&pc);
                         try writer.print("x{}", .{arg});
                         if (i < count - 1) try writer.print(", ", .{});
                     }
                     try writer.print("\n", .{});
                 },
-                .pusharg => {
-                    const arg = self.readWord(&pc).register;
-                    try writer.print("x{}\n", .{arg});
+                .pop_one => try writer.print("\n", .{}),
+                .pop_multi => {
+                    const count = self.readWord(&pc);
+                    try writer.print("{}\n", .{count});
                 },
-                .ret => {
-                    const val = self.readWord(&pc).register;
-                    try writer.print("x{}\n", .{val});
-                },
+                // .ret => {
+                //     const val = self.readWord(&pc).register;
+                //     try writer.print("x{}\n", .{val});
+                // },
+                else => {},
             }
             return pc;
         }
