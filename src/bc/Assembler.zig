@@ -577,7 +577,10 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
 
     const scratch_top = self.scratch.items.len;
     try self.scratch.ensureUnusedCapacity(self.arena, src_args.len);
-    for (src_args) |src_arg| {
+    var i = src_args.len;
+    while (i > 0) {
+        i -= 1;
+        const src_arg = src_args[i];
         const arg = self.register_map.get(src_arg).?;
         if (self.rangeEnd(src_arg) == inst) self.deallocate(arg);
         self.scratch.appendAssumeCapacity(@bitCast(arg));
