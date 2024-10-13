@@ -1023,13 +1023,38 @@ pub const Assembler = struct {
     }
 
     fn callFast(self: *Assembler) !void {
+        const handler = self.module.getNamedFunction("interpreter_call_fast");
         const ip = self.param(.ip);
         var fp = self.param(.fp);
         var sp = self.param(.sp);
         const ctx = self.param(.ctx);
 
-        // TODO: branch back to init if key doesn't match
         const function = self.load(self.read(self.offset(1), .sext, "function.reg"), .pointer, "function");
+        const function_int = self.builder.cast(.ptrtoint, function, self.ctx.int(64), "function.int");
+        const function_trunc = self.builder.cast(.truncate, function_int, self.ctx.int(32), "function.trunc");
+        const key_ptr = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{self.offset(3)}, "ic.key.ptr");
+        const key = self.builder.load(self.ctx.int(32), key_ptr, "ic.key");
+
+        // compare shape against key
+        const miss_block = BasicBlock.append(self.ctx, handler, "miss");
+        const exit_block = BasicBlock.append(self.ctx, handler, "exit");
+        const cond = self.builder.icmp(.ne, function_trunc, key, "ic.miss");
+        _ = self.builder.condBr(cond, miss_block, exit_block);
+        self.builder.positionAtEnd(miss_block);
+
+        // cache miss branch - call call_init in place
+        // symbolically, we update the opcode to ldg_init and tail call ourselves, but
+        // we can avoid both the store and indirect call because we know the target is
+        // call_init, and it will modify the opcode back to call_fast and come back here
+        // when done
+        const init_handler = self.module.getNamedFunction("interpreter_call_init");
+        const args = .{ ip, fp, sp, ctx };
+        const handler_call = self.builder.call(handlerType(self.ctx), init_handler, &args, "");
+        c.LLVMSetTailCallKind(@ptrCast(handler_call), c.LLVMTailCallKindMustTail);
+        c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMGHCCallConv);
+        _ = self.builder.ret(null);
+        self.builder.positionAtEnd(exit_block);
+
         // push the saved ip, fp, and sp
         const sip = self.builder.gep(.inbounds, self.ctx.int(32), ip, &.{self.offset(4)}, "sip");
         const ssp = sp;
