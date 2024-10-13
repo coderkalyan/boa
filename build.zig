@@ -9,57 +9,54 @@ pub fn build(b: *std.Build) void {
 
     // The interpreter is generated at build time using a Zig program that
     // uses LLVM to emit efficient bytecode handlers.
-    // const generator = b.addExecutable(.{
-    //     .name = "interpreter-generator",
-    //     .root_source_file = b.path("src/interpreter/generator.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
+    const vm_assembler = b.addExecutable(.{
+        .name = "assembler",
+        .root_source_file = b.path("vm/assembler.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vm_assembler.linkLibC();
+    vm_assembler.linkSystemLibrary("LLVM-18");
 
-    // The generator depends on libc and LLVM.
-    // generator.linkLibC();
-    // generator.linkSystemLibrary("LLVM-18");
+    const vm_assembler_unit_tests = b.addTest(.{
+        .root_source_file = b.path("vm/assembler.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vm_assembler_unit_tests.linkLibC();
+    vm_assembler_unit_tests.linkSystemLibrary("LLVM-18");
 
-    // Run the generator and capture its output LLVM bitcode.
-    // const run_generator_user = b.addRunArtifact(generator);
-    // if (b.args) |args| {
-    //     run_generator_user.addArgs(args);
-    // }
+    const run_vm_assembler_unit_tests = b.addRunArtifact(vm_assembler_unit_tests);
 
-    // Add a user facing step to run only the generator.
-    // const run_generator_step = b.step("run-generator", "Run the interpreter generator");
-    // run_generator_step.dependOn(&run_generator_user.step);
-
-    // Test the generator.
-    // const generator_tests = b.addTest(.{
-    //     .root_source_file = b.path("src/interpreter/generator.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // generator_tests.linkLibC();
-    // generator_tests.linkSystemLibrary("LLVM-18");
-    // const run_generator_tests = b.addRunArtifact(generator_tests);
-
-    // Add a user facing step to test the generator.
-    // const test_generator_step = b.step("test-generator", "Run interpreter generator unit tests");
-    // test_generator_step.dependOn(&run_generator_tests.step);
-
-    // Run the generator (as part of the main build process) and capture its output LLVM bitcode.
-    // const run_generator = b.addRunArtifact(generator);
-    // const interpreter_bc = run_generator.addOutputFileArg("interpreter.bc");
+    // Run the assembler (as part of the main build process) and capture its output LLVM bitcode.
+    const run_assembler = b.addRunArtifact(vm_assembler);
+    const interpreter_bc = run_assembler.addOutputFileArg("interpreter.bc");
 
     // Run the bitcode through the standard optimizer.
+    // TODO: disabled until we use custom optimization passes, since this was
+    // generating poor code with -O3 (worse than non-optimized in some cases)
     // const opt_run = b.addSystemCommand(&.{"opt"});
     // opt_run.addFileArg(interpreter_bc);
     // opt_run.addArg("-o");
     // const opt_bc = opt_run.addOutputFileArg("interpreter-opt.bc");
 
     // Compile the bitcode into assembly for the target platform.
-    // const llc_run = b.addSystemCommand(&.{"llc"});
+    const llc_run = b.addSystemCommand(&.{"llc"});
     // llc_run.addFileArg(opt_bc);
-    // llc_run.addArg("-o");
-    // const interpreter_s = llc_run.addOutputFileArg("interpreter.s");
+    llc_run.addFileArg(interpreter_bc);
+    llc_run.addArg("-o");
+    const interpreter_s = llc_run.addOutputFileArg("interpreter.s");
+
+    const vm_unit_tests = b.addTest(.{
+        .root_source_file = b.path("vm/test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add the generated interpreter to the executable source.
+    vm_unit_tests.addAssemblyFile(interpreter_s);
+
+    const run_vm_unit_tests = b.addRunArtifact(vm_unit_tests);
 
     const exe = b.addExecutable(.{
         .name = "boa",
@@ -69,7 +66,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add the generated interpreter to the executable source.
-    // exe.addAssemblyFile(interpreter_s);
+    exe.addAssemblyFile(interpreter_s);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -106,54 +103,6 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    // The interpreter is generated at build time using a Zig program that
-    // uses LLVM to emit efficient bytecode handlers.
-    const vm_assembler = b.addExecutable(.{
-        .name = "assembler",
-        .root_source_file = b.path("vm/assembler.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vm_assembler.linkLibC();
-    vm_assembler.linkSystemLibrary("LLVM-18");
-
-    const vm_assembler_unit_tests = b.addTest(.{
-        .root_source_file = b.path("vm/assembler.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vm_assembler_unit_tests.linkLibC();
-    vm_assembler_unit_tests.linkSystemLibrary("LLVM-18");
-
-    const run_vm_assembler_unit_tests = b.addRunArtifact(vm_assembler_unit_tests);
-
-    // Run the assembler (as part of the main build process) and capture its output LLVM bitcode.
-    const run_assembler = b.addRunArtifact(vm_assembler);
-    const interpreter_bc = run_assembler.addOutputFileArg("interpreter.bc");
-
-    // Run the bitcode through the standard optimizer.
-    const opt_run = b.addSystemCommand(&.{"opt"});
-    opt_run.addFileArg(interpreter_bc);
-    opt_run.addArg("-o");
-    const opt_bc = opt_run.addOutputFileArg("interpreter-opt.bc");
-
-    // Compile the bitcode into assembly for the target platform.
-    const llc_run = b.addSystemCommand(&.{"llc"});
-    llc_run.addFileArg(opt_bc);
-    llc_run.addArg("-o");
-    const interpreter_s = llc_run.addOutputFileArg("interpreter.s");
-
-    const vm_unit_tests = b.addTest(.{
-        .root_source_file = b.path("vm/test.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Add the generated interpreter to the executable source.
-    vm_unit_tests.addAssemblyFile(interpreter_s);
-
-    const run_vm_unit_tests = b.addRunArtifact(vm_unit_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
