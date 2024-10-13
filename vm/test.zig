@@ -686,6 +686,98 @@ test "call and return no args" {
     try std.testing.expectEqual(200, stack[0]);
 }
 
+test "call and return one arg" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, -5 - 0 });
+    var function_info: FunctionInfoLayout = .{
+        .tree = undefined,
+        .ir = undefined,
+        .bytecode = inner_tape.ptr,
+        .node = undefined,
+        .frame_size = 1,
+        .state = 1,
+    };
+
+    const outer_tape = try allocTape(arena, undefined, .{
+        Opcode.push_one,
+        0, // arg: x0
+        Opcode.call_init,
+        1, // target: x1
+        0, // return: x0
+        0, // inline cache
+        Opcode.pop_one,
+        Opcode.trap,
+    });
+    const in_stack = .{ 300, @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
+    const outer_frame_size = 2;
+
+    const stack = try allocStack(arena, in_stack);
+
+    const ip = outer_tape.ptr;
+    const fp = stack.ptr;
+    const sp = fp + outer_frame_size;
+    interpreter_entry(ip, fp, sp, undefined);
+
+    try std.testing.expectEqual(ip + 7, trap_ip);
+    try std.testing.expectEqual(fp, trap_fp);
+    try std.testing.expectEqual(sp, trap_sp);
+    try std.testing.expectEqual(300, stack[0]);
+}
+
+test "call and return two args" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const inner_tape = try allocTape(arena, undefined, .{
+        Opcode.iadd,
+        0, // x0
+        -5 - 0, // arg0
+        -5 - 1, // arg1
+        Opcode.ret,
+        0, // x0
+    });
+    var function_info: FunctionInfoLayout = .{
+        .tree = undefined,
+        .ir = undefined,
+        .bytecode = inner_tape.ptr,
+        .node = undefined,
+        .frame_size = 1,
+        .state = 1,
+    };
+
+    const outer_tape = try allocTape(arena, undefined, .{
+        Opcode.push_multi,
+        2,
+        0, // arg: x0
+        1, // arg: x1
+        Opcode.call_init,
+        2, // target: x2
+        0, // return: x0
+        0, // inline cache
+        Opcode.pop_multi,
+        2,
+        Opcode.trap,
+    });
+    const in_stack = .{ 300, 200, @intFromPtr(&function_info), 0, 0, 0, 0, 0 };
+    const outer_frame_size = 3;
+
+    const stack = try allocStack(arena, in_stack);
+
+    const ip = outer_tape.ptr;
+    const fp = stack.ptr;
+    const sp = fp + outer_frame_size;
+    interpreter_entry(ip, fp, sp, undefined);
+
+    try std.testing.expectEqual(ip + 10, trap_ip);
+    try std.testing.expectEqual(fp, trap_fp);
+    try std.testing.expectEqual(sp, trap_sp);
+    try std.testing.expectEqual(500, stack[0]);
+}
+
 // test "callrt" {
 //     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena_allocator.deinit();
