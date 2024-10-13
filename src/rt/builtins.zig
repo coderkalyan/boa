@@ -31,13 +31,16 @@ pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
     const bc_data = Assembler.assemble(ctx.gpa, ipool, fi.ir) catch unreachable;
     const bc_index = ipool.createBytecode(bc_data) catch unreachable;
     // TODO: this needs to be fixed
+    // TODO: but i forgot why
     fi.bytecode = ipool.bytecodePtr(bc_index).code.ptr;
+    fi.frame_size = ipool.bytecodePtr(bc_index).frame_size;
 
     // {
-    // std.debug.print("bytecode listing for function: {}\n", .{fi.bytecode.len});
-    // const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-    // _ = bytecode_renderer;
-    //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), ctx.gpa, ipool, fi.bytecode);
+    //     const code = ipool.bytecodePtr(bc_index);
+    //     std.debug.print("bytecode listing for function: {}\n", .{code.code.len});
+    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+    //     // _ = bytecode_renderer;
+    //     var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), ctx.gpa, ipool, code);
     //     renderer.render() catch unreachable;
     // }
 
@@ -48,6 +51,13 @@ pub fn attrIndex(object: *Object, in_attr: u64) callconv(.C) i64 {
     const attr: InternPool.Index = @enumFromInt(@as(u32, @truncate(in_attr)));
     if (object.shape.get(attr)) |index| return @intCast(index);
     return -1;
+}
+
+pub fn attrInsert(ctx: *Context, object: *Object, in_attr: u64) callconv(.C) i64 {
+    const attr: InternPool.Index = @enumFromInt(@as(u32, @truncate(in_attr)));
+    object.shape = object.shape.transition(ctx.pba, attr) catch unreachable;
+    _ = object.attributes.addOne(ctx.pba) catch unreachable;
+    return @intCast(object.shape.get(attr).?);
 }
 
 pub fn attrLoad(object: *Object, index: u64) callconv(.C) i64 {

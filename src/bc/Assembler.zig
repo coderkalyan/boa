@@ -449,13 +449,10 @@ fn addCall(self: *Assembler, target: Register, dst: Register) !void {
 }
 
 fn addRet(self: *Assembler, val: Register) !void {
-    _ = self;
-    _ = val;
-    // TODO: implement
-    // try self.code.appendSlice(self.gpa, &.{
-    //     @intFromEnum(Opcode.ret),
-    //     val,
-    // });
+    try self.code.appendSlice(self.gpa, &.{
+        @intFromEnum(Opcode.ret),
+        val,
+    });
 }
 
 fn reserveJump(self: *Assembler) !u32 {
@@ -566,7 +563,7 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     const payload = ir.instPayload(inst).unary_extra;
     const ptr = payload.op;
     const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
-    const args = ir.extraSlice(slice);
+    const src_args: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
 
     if (ir.instTag(ptr) == .builtin) {
         try self.expandBuiltin(inst);
@@ -578,8 +575,16 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
 
-    try self.code.ensureUnusedCapacity(self.gpa, 4 + args.len);
-    try self.addPush(@ptrCast(args));
+    const scratch_top = self.scratch.items.len;
+    try self.scratch.ensureUnusedCapacity(self.arena, src_args.len);
+    for (src_args) |src_arg| {
+        const arg = self.register_map.get(src_arg).?;
+        if (self.rangeEnd(src_arg) == inst) self.deallocate(arg);
+        self.scratch.appendAssumeCapacity(@bitCast(arg));
+    }
+
+    const args: []const i32 = @ptrCast(self.scratch.items[scratch_top..]);
+    try self.addPush(args);
     try self.addCall(target, dst);
     try self.addPop(args.len);
 }

@@ -513,11 +513,12 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     const count = self.readWord(&pc);
                     try writer.print("{}\n", .{count});
                 },
-                // .ret => {
-                //     const val = self.readWord(&pc).register;
-                //     try writer.print("x{}\n", .{val});
-                // },
-                else => {},
+                .ret => {
+                    const val = self.readWord(&pc);
+                    try writer.print("x{}\n", .{val});
+                },
+                .trap => {},
+                .callrt => unreachable, // TODO
             }
             return pc;
         }

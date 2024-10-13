@@ -59,6 +59,12 @@ export fn rt_attr_index(object: *anyopaque, attr: u64) callconv(.C) i64 {
     return @intCast(attr);
 }
 
+export fn rt_attr_insert(ctx: *anyopaque, object: *anyopaque, attr: u64) callconv(.C) i64 {
+    _ = ctx;
+    _ = object;
+    return @intCast(attr);
+}
+
 export fn rt_attr_load(object: *anyopaque, attr: u64) callconv(.C) i64 {
     _ = object;
     return @intCast(attr * 10);

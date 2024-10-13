@@ -12,6 +12,7 @@ const Bytecode = @import("bc/Bytecode.zig");
 const Object = @import("rt/object.zig").Object;
 const Shape = @import("rt/Shape.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
+const types = @import("rt/types.zig");
 // const builtins = @import("rt/builtins.zig");
 // const builtins = @import("interpreter/builtins.zig");
 // const builtins_impl = @import("rt/builtins_impl.zig");
@@ -20,11 +21,12 @@ const builtins = @import("rt/builtins.zig");
 const posix = std.posix;
 const Node = Ast.Node;
 const asBytes = std.mem.asBytes;
+const Opcode = Bytecode.Opcode;
 const max_file_size = std.math.maxInt(u32);
 const value_stack_size = 8 * 1024 * 1024;
 const call_stack_size = 1 * 1024 * 1024;
 
-extern fn interpreter_entry(ip: [*]const u32, fp: [*]i64, sp: [*]i64, ctx: *const builtins.Context) callconv(.C) void;
+extern fn interpreter_entry(ip: [*]i32, fp: [*]i64, sp: [*]i64, ctx: *types.Context) callconv(.C) void;
 
 pub fn readSource(gpa: Allocator, input_filename: []const u8) ![:0]u8 {
     var file = try std.fs.cwd().openFile(input_filename, .{});
@@ -72,45 +74,41 @@ pub fn main() !void {
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);
 
-    {
-        const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-        // _ = ir_renderer;
-        var renderer = ir_renderer.init(writer, arena.allocator(), ir);
-        try renderer.render();
-        try buffered_out.flush();
-    }
+    // {
+    //     const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+    //     // _ = ir_renderer;
+    //     var renderer = ir_renderer.init(writer, arena.allocator(), ir);
+    //     try renderer.render();
+    //     try buffered_out.flush();
+    // }
 
     try writer.print("\n", .{});
 
-    // var page_bump: PageBumpAllocator = .{};
-    // const pba = page_bump.allocator();
-    // var constant_pool = ConstantPool.init(gpa, pba);
-
     const bc_data = try Assembler.assemble(gpa, &pool, ir);
     const bc_index = try pool.createBytecode(bc_data);
-    const bc = pool.bytecodePtr(bc_index);
-    {
-        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-        // _ = bytecode_renderer;
-        var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
-        renderer.render() catch |err| {
-            try buffered_out.flush();
-            return err;
-        };
-        try buffered_out.flush();
-    }
+    // const bc = pool.bytecodePtr(bc_index);
+    // {
+    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+    //     // _ = bytecode_renderer;
+    //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
+    //     renderer.render() catch |err| {
+    //         try buffered_out.flush();
+    //         return err;
+    //     };
+    //     try buffered_out.flush();
+    // }
 
-    // const findex = try pool.createFunction(.{
-    //     .intern_pool = &pool,
-    //     .tree = &tree,
-    //     .node = module_node,
-    //     .lazy_ir = ir_index,
-    //     .lazy_bytecode = bc_index,
-    //     .return_type = .nonetype,
-    // });
-    // const ip = try pool.put(.{ .function = findex });
-    //
-    // try interpret(gpa, &pool, &constant_pool, ip);
+    const findex = try pool.createFunction(.{
+        .state = .interpreted,
+        .tree = &tree,
+        .node = module_node,
+        .return_type = .nonetype,
+        .ir = ir_index,
+        .bytecode = bc_index,
+    });
+    const ip = try pool.put(.{ .function = findex });
+
+    try interpret(gpa, &pool, ip);
 }
 
 pub fn interpret(
@@ -118,101 +116,77 @@ pub fn interpret(
     pool: *InternPool,
     fi_ip: InternPool.Index,
 ) !void {
-    _ = gpa;
-    _ = pool;
-    _ = fi_ip;
-    // _ = constant_pool;
-    // var page_bump: PageBumpAllocator = .{};
-    // const pba = page_bump.allocator();
-    //
-    // const shape_ptr = try pba.create(Shape);
-    // shape_ptr.* = try Shape.init(pba);
-    // const global = try Object.init(gpa, shape_ptr);
-    // defer gpa.destroy(global);
-    //
-    // const stack = try posix.mmap(
-    //     null,
-    //     value_stack_size,
-    //     posix.PROT.READ | posix.PROT.WRITE,
-    //     .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-    //     -1,
-    //     0,
-    // );
+    var page_bump: PageBumpAllocator = .{};
+    const pba = page_bump.allocator();
 
-    // const call_stack = try posix.mmap(
-    //     null,
-    //     call_stack_size,
-    //     posix.PROT.READ | posix.PROT.WRITE,
-    //     .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-    //     -1,
-    //     0,
-    // );
+    const shape_ptr = try pba.create(Shape);
+    shape_ptr.* = try Shape.init(pba);
+    const global = try Object.init(gpa, shape_ptr);
+    defer gpa.destroy(global);
 
-    // const pool_ptr: usize = @intFromPtr(pool);
-    // const fi_ptr = @intFromPtr(pool.functionPtr(pool.get(fi_ip).function));
-    // const entry_bc: Bytecode = .{
-    //     .register_count = 0,
-    //     .ic_count = 0,
-    //     .code = &.{
-    //         .{ .imm = @truncate(pool_ptr) }, // intern pool
-    //         .{ .imm = @truncate(pool_ptr >> 32) },
-    //         .{ .opcode = .ldw }, // ldw x0, fi_ptr
-    //         .{ .register = 0 },
-    //         .{ .imm = @truncate(fi_ptr) },
-    //         .{ .imm = @truncate(fi_ptr >> 32) },
-    //         // .{ .opcode = .callrt0 },
-    //         // .{ .imm = 0 },
-    //         .{ .opcode = .call }, // call x0, x0
-    //         .{ .register = 0 },
-    //         .{ .register = 0 },
-    //         .{ .count = 0 },
-    //         .{ .opcode = .exit },
-    //     },
-    //     .entry_pc = 2,
-    // };
+    const stack = try posix.mmap(
+        null,
+        value_stack_size,
+        posix.PROT.READ | posix.PROT.WRITE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
 
-    // const ic_vector = try gpa.alloc(u32, 10);
-    // @memset(ic_vector, std.math.maxInt(u32));
+    const function = pool.functionPtr(pool.get(fi_ip).function);
+    const fi_ptr = try pba.create(types.FunctionInfo);
+    fi_ptr.* = .{
+        .tree = function.tree,
+        .ir = pool.irPtr(function.ir),
+        .bytecode = pool.bytecodePtr(function.bytecode).code.ptr,
+        .node = function.node,
+        .frame_size = pool.bytecodePtr(function.bytecode).frame_size,
+        .state = .interpreted,
+    };
 
-    // var context_frame: Interpreter.ContextFrame = .{
-    //     .pba = &pba,
-    //     .global_object = global,
-    //     .constant_pool = constant_pool,
-    //     .ic_vector = ic_vector.ptr,
-    // };
+    const fi_ldw: i64 = @bitCast(@intFromPtr(fi_ptr));
+    std.debug.print("0x{x}\n", .{fi_ldw});
+    var code: std.ArrayListUnmanaged(i32) = .{};
+    try code.appendSlice(gpa, &.{
+        // ldw x0, fi_ptr
+        @intFromEnum(Opcode.ldw),
+        0,
+        @truncate(fi_ldw),
+        @truncate(fi_ldw >> 32),
+        // call x0, x0
+        @intFromEnum(Opcode.call_init),
+        0,
+        0,
+        0, // inline cache entry
+        @intFromEnum(Opcode.exit),
+    });
+    const entry_bc: Bytecode = .{
+        .frame_size = 1,
+        .code = code.items,
+    };
 
-    // const context_slots = std.meta.fields(Interpreter.ContextFrame).len;
-    // const stack: [*]Interpreter.Slot = @ptrCast(value_stack.ptr);
-    // @memcpy(asBytes(stack[0..context_slots]), asBytes(&context_frame));
-    // var fp = context_slots;
+    const fp: [*]i64 = @ptrCast(@alignCast(stack.ptr));
+    const sp = fp + entry_bc.frame_size;
+    std.debug.print("{*} {*}\n", .{ fp, sp });
 
-    // const call_frame: Interpreter.CallFrame = .{
-    //     .code = entry_bc.code.ptr,
-    //     .pc = undefined,
-    //     .fp = fp,
-    //     .register_count = 1,
-    //     .return_register = undefined,
-    // };
-    // @memcpy(call_stack[0..@sizeOf(Interpreter.CallFrame)], asBytes(&call_frame));
+    var context: types.Context = .{
+        .ipool = pool,
+        .global = global,
+        .gpa = gpa,
+        .pba = pba,
+        .gca = undefined, // TODO: put this in
+    };
 
-    // stack[fp].ptr = &call_stack.ptr[0];
-    // fp += 1;
-    // stack[fp].int = 0;
-    // const fp: [*]i64 = @ptrCast(value_stack.ptr);
-    // const sp: [*]i64 = fp + 1;
-    // const context: builtins.Context = .{
-    //     .pba = pba,
-    //     .global_object = global,
-    // };
-
-    // interpreter_entry(@ptrCast(entry_bc.code.ptr + 2), fp, sp, &context);
-    // std.debug.print("{x}\n", .{fp[0]});
+    interpreter_entry(entry_bc.code.ptr, fp, sp, &context);
+    std.debug.print("{any}\n", .{fp[0..16]});
+    // std.debug.print("{x}\n", .{fp[entry_bc.frame_size + 4 + 0]});
 }
 
 comptime {
     @export(builtins.compile, .{ .name = "rt_compile", .linkage = .strong });
     @export(builtins.dispatch, .{ .name = "rt_dispatch", .linkage = .strong });
     @export(builtins.attrIndex, .{ .name = "rt_attr_index", .linkage = .strong });
+    @export(builtins.attrInsert, .{ .name = "rt_attr_insert", .linkage = .strong });
     @export(builtins.attrLoad, .{ .name = "rt_attr_load", .linkage = .strong });
     @export(builtins.attrStore, .{ .name = "rt_attr_store", .linkage = .strong });
     // @export(builtins_impl.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });

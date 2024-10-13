@@ -143,7 +143,7 @@ pub const Inst = struct {
         },
 
         comptime {
-            if (builtin.mode != .Debug) {
+            if (builtin.mode == .ReleaseFast) {
                 std.debug.assert(@sizeOf(Payload) <= 8);
             }
         }

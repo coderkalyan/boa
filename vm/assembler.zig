@@ -98,6 +98,7 @@ pub const Assembler = struct {
         .{ .id = .print1_str, .args = .{.ptr}, .ret = .void },
         .{ .id = .compile, .args = .{ .ptr, .ptr }, .ret = .void },
         .{ .id = .attr_index, .args = .{ .ptr, .int }, .ret = .int },
+        .{ .id = .attr_insert, .args = .{ .ptr, .ptr, .int }, .ret = .int },
         .{ .id = .attr_load, .args = .{ .ptr, .int }, .ret = .int },
         .{ .id = .attr_store, .args = .{ .ptr, .int, .int }, .ret = .void },
     };
@@ -681,6 +682,9 @@ pub const Assembler = struct {
         const attr = self.read(self.offset(2), .none, "attr");
         const attr_int = self.builder.cast(.zext, attr, self.ctx.int(64), "attr.int");
 
+        // TODO: guard against invalid index and error, once we have
+        // a way to trap exceptions
+        //
         // query runtime for (object, attribute) -> index mapping
         const attrIndex = .{ .id = .attr_index, .args = .{ .ptr, .int }, .ret = .int };
         const index = self.callBuiltin(attrIndex, &.{ object, attr_int });
@@ -754,6 +758,8 @@ pub const Assembler = struct {
     }
 
     fn stgInit(self: *Assembler) !void {
+        const handler = self.module.getNamedFunction("interpreter_stg_init");
+        const entry_block = handler.entryBlock();
         const ip = self.param(.ip);
         const fp = self.param(.fp);
         const sp = self.param(.sp);
@@ -767,7 +773,32 @@ pub const Assembler = struct {
 
         // query runtime for (object, attribute) -> index mapping
         const attrIndex = .{ .id = .attr_index, .args = .{ .ptr, .int }, .ret = .int };
-        const index = self.callBuiltin(attrIndex, &.{ object, attr_int });
+        var index = self.callBuiltin(attrIndex, &.{ object, attr_int });
+        index = self.builder.cast(.truncate, index, self.ctx.int(32), "index");
+        // if the index is -1, insert the attribute into the global/shape
+        // using a transition (call runtime again)
+
+        const miss_block = BasicBlock.append(self.ctx, handler, "miss");
+        const exit_block = BasicBlock.append(self.ctx, handler, "exit");
+        const minus_one = self.builder.iconst(self.ctx.int(32), @bitCast(@as(i64, -1)), true);
+        const cond = self.builder.icmp(.eq, index, minus_one, "index.invalid");
+        _ = self.builder.condBr(cond, miss_block, exit_block);
+        self.builder.positionAtEnd(miss_block);
+
+        // miss branch - insert the index into the object (populates with junk)
+        const attrInsert = .{ .id = .attr_insert, .args = .{ .ptr, .ptr, .int }, .ret = .int };
+        var new_index = self.callBuiltin(attrInsert, &.{ ctx, object, attr_int });
+        new_index = self.builder.cast(.truncate, new_index, self.ctx.int(32), "index");
+        _ = self.builder.br(exit_block);
+        self.builder.positionAtEnd(exit_block);
+
+        // exit block - first phi on the miss to use the correct value of index
+        const phi = self.builder.phi(self.ctx.int(32), "index.phi");
+        // _ = entry_block;
+        c.LLVMAddIncoming(@ptrCast(phi), @constCast(@ptrCast(&new_index)), @constCast(@ptrCast(&miss_block)), 1);
+        c.LLVMAddIncoming(@ptrCast(phi), @constCast(@ptrCast(&index)), @constCast(@ptrCast(&entry_block)), 1);
+        index = phi;
+
         // store the mapping result as an inline cache
         // because the current implementation ensures the shape is in the beginning,
         // we can cast without issues (this should be verified and frozen in zig code)
@@ -785,9 +816,9 @@ pub const Assembler = struct {
         const opcode = self.builder.iconst(self.ctx.int(32), @intFromEnum(Opcode.stg_fast), false);
         _ = self.builder.store(opcode, opcode_ptr);
 
-        const handler = self.module.getNamedFunction("interpreter_stg_fast");
+        const next_handler = self.module.getNamedFunction("interpreter_stg_fast");
         const args = .{ ip, fp, sp, ctx };
-        const handler_call = self.builder.call(handlerType(self.ctx), handler, &args, "");
+        const handler_call = self.builder.call(handlerType(self.ctx), next_handler, &args, "");
         c.LLVMSetTailCallKind(@ptrCast(handler_call), c.LLVMTailCallKindMustTail);
         c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMGHCCallConv);
     }

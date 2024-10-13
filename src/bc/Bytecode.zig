@@ -1,7 +1,7 @@
 const std = @import("std");
 
 frame_size: u32,
-code: []const i32,
+code: []i32,
 
 pub const Opcode = enum(i32) {
     // load a 32 bit immediate into register
