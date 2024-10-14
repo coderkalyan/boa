@@ -5,3 +5,4 @@ def main():
     # d = 1 + None
 
 main()
+print(2 ** 3)
