@@ -784,19 +784,19 @@ test "call and return two args" {
     try std.testing.expectEqual(500, stack[0]);
 }
 
-// test "callrt" {
-//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-//     defer arena_allocator.deinit();
-//     const arena = arena_allocator.allocator();
-//
-//     try runTest(arena, undefined, .{
-//         .in_tape = .{ Opcode.callrt, 0, 0 },
-//         .in_stack = .{ 100, 100, 200, 300 },
-//         .frame_size = 1,
-//         .out_stack = .{ 100, 100, 200, 300 },
-//         .offsets = .{ 3, 0, 0 },
-//     });
-// }
+test "callrt" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try runTest(arena, undefined, .{
+        .in_tape = .{ Opcode.callrt, 0, 0 },
+        .in_stack = .{ 100, 100, 200, 300 },
+        .frame_size = 1,
+        .out_stack = .{ 100, 100, 200, 300 },
+        .offsets = .{ 3, 0, 0 },
+    });
+}
 
 pub fn main() !void {
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);

@@ -145,7 +145,6 @@ pub fn interpret(
     };
 
     const fi_ldw: i64 = @bitCast(@intFromPtr(fi_ptr));
-    std.debug.print("0x{x}\n", .{fi_ldw});
     var code: std.ArrayListUnmanaged(i32) = .{};
     try code.appendSlice(gpa, &.{
         // ldw x0, fi_ptr
@@ -167,7 +166,6 @@ pub fn interpret(
 
     const fp: [*]i64 = @ptrCast(@alignCast(stack.ptr));
     const sp = fp + entry_bc.frame_size;
-    std.debug.print("{*} {*}\n", .{ fp, sp });
 
     var context: types.Context = .{
         .ipool = pool,
@@ -178,8 +176,6 @@ pub fn interpret(
     };
 
     interpreter_entry(entry_bc.code.ptr, fp, sp, &context);
-    std.debug.print("{any}\n", .{fp[0..16]});
-    // std.debug.print("{x}\n", .{fp[entry_bc.frame_size + 4 + 0]});
 }
 
 comptime {
@@ -189,12 +185,4 @@ comptime {
     @export(builtins.attrInsert, .{ .name = "rt_attr_insert", .linkage = .strong });
     @export(builtins.attrLoad, .{ .name = "rt_attr_load", .linkage = .strong });
     @export(builtins.attrStore, .{ .name = "rt_attr_store", .linkage = .strong });
-    // @export(builtins_impl.pushArgs, .{ .name = "rt_push_args", .linkage = .strong });
-    // @export(builtins_impl.evalCallable, .{ .name = "rt_eval_callable", .linkage = .strong });
-    // @export(builtins_impl.trap, .{ .name = "rt_trap", .linkage = .strong });
-    // @export(builtins_impl.attrIndexOrPanic, .{ .name = "rt_attr_index_or_panic", .linkage = .strong });
-    // @export(builtins_impl.attrIndexOrInsert, .{ .name = "rt_attr_index_or_insert", .linkage = .strong });
-    // @export(builtins_impl.loadIndex, .{ .name = "rt_load_index", .linkage = .strong });
-    // @export(builtins_impl.storeIndex, .{ .name = "rt_store_index", .linkage = .strong });
-    // @export(builtins_impl.pint, .{ .name = "rt_pint", .linkage = .strong });
 }

@@ -6,6 +6,7 @@ const PrePass = @import("PrePass.zig");
 const Liveness = @import("../ir/Liveness.zig");
 const String = @import("../rt/string.zig").String;
 const types = @import("../rt/types.zig");
+const builtins = @import("../rt/builtins.zig");
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
@@ -448,6 +449,30 @@ fn addCall(self: *Assembler, target: Register, dst: Register) !void {
     });
 }
 
+fn addCallRt(self: *Assembler, id: builtins.Id, dst: Register) !void {
+    try self.code.appendSlice(self.gpa, &.{
+        @intFromEnum(Opcode.callrt),
+        @intFromEnum(id),
+        dst,
+    });
+}
+
+fn callRuntimeArgs(self: *Assembler, id: builtins.Id, dst: Register, in_args: []const Register) !void {
+    const scratch_top = self.scratch.items.len;
+    defer self.scratch.shrinkRetainingCapacity(scratch_top);
+    try self.scratch.ensureUnusedCapacity(self.arena, in_args.len);
+    var i: usize = in_args.len;
+    while (i > 0) {
+        i -= 1;
+        self.scratch.appendAssumeCapacity(@bitCast(in_args[i]));
+    }
+
+    const args = self.scratch.items[scratch_top..];
+    try self.addPush(@ptrCast(args));
+    try self.addCallRt(id, dst);
+    try self.addPop(args.len);
+}
+
 fn addRet(self: *Assembler, val: Register) !void {
     try self.code.appendSlice(self.gpa, &.{
         @intFromEnum(Opcode.ret),
@@ -551,9 +576,9 @@ fn argInst(self: *Assembler, inst: Ir.Index) !void {
     const pos: i32 = @intCast(arg.position);
     // arguments are indexed as -1, -2, -3... but:
     // fp[-1] is the return register
-    // fp[-2] is the saved frame pointer
-    // fp[-3] is the saved stack pointer
-    // fp[-3] is the saved instruction pointer
+    // fp[-2] is the saved stack pointer
+    // fp[-3] is the saved frame pointer
+    // fp[-4] is the saved instruction pointer
     // so we start at -5
     try self.register_map.put(self.arena, inst, -5 - pos);
 }
@@ -616,16 +641,17 @@ fn builtinPrint(self: *Assembler, inst: Ir.Index) !void {
         const operand = self.register_map.get(arg).?;
         if (self.rangeEnd(arg) == inst) self.deallocate(operand);
 
-        const opcode: Opcode = switch (ty) {
+        // we don't use it, but the callrt interface needs a return register
+        const dst = try self.allocate();
+        switch (ty) {
             .nonetype => unreachable, // TODO: unimplemented
-            // TODO: all unimplemented
-            // .int => .pint,
-            // .float => .pfloat,
-            // .bool => .pfloat,
-            // .str => .pstr,
+            .int => try self.callRuntimeArgs(.print1_int, dst, &.{operand}),
+            .float => try self.callRuntimeArgs(.print1_float, dst, &.{operand}),
+            .bool => try self.callRuntimeArgs(.print1_bool, dst, &.{operand}),
+            .str => try self.callRuntimeArgs(.print1_str, dst, &.{operand}),
             else => unreachable,
-        };
-        try self.addPrint(opcode, operand);
+        }
+        self.deallocate(dst);
     }
 }
 
@@ -643,14 +669,20 @@ fn builtinLen(self: *Assembler, inst: Ir.Index) !void {
 
     const dst = try self.allocate();
     try self.register_map.put(self.arena, inst, dst);
-    // TODO: implement
-    unreachable;
-    // try self.addUnary(.strlen, dst, operand);
+    try self.callRuntimeArgs(.strlen, dst, &.{operand});
 }
 
 fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
     const binary = self.ir.instPayload(inst).binary;
     const ty = self.pool.get(self.ir.typeOf(binary.l)).ty;
+
+    const l = self.register_map.get(binary.l).?;
+    const r = self.register_map.get(binary.r).?;
+    if (self.rangeEnd(binary.l) == inst) self.deallocate(l);
+    if (self.rangeEnd(binary.r) == inst) self.deallocate(r);
+    const dst = try self.allocate();
+    try self.register_map.put(self.arena, inst, dst);
+
     const tag: Bytecode.Opcode = switch (ty) {
         .int => switch (self.ir.instTag(inst)) {
             .add => .iadd,
@@ -658,7 +690,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             .mul => .imul,
             .div => .idiv,
             .mod => .imod,
-            // .pow => .ipow,
+            .pow => return self.callRuntimeArgs(.ipow, dst, &.{ l, r }),
             .band => .band,
             .bor => .bor,
             .bxor => .bxor,
@@ -678,7 +710,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             .mul => .fmul,
             .div => .fdiv,
             .mod => .fmod,
-            // .pow => .fpow,
+            .pow => return self.callRuntimeArgs(.fpow, dst, &.{ l, r }),
             .eq, .ne => unreachable,
             .lt => .flt,
             .gt => .fgt,
@@ -687,20 +719,14 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             else => unreachable,
         },
         .str => switch (self.ir.instTag(inst)) {
-            // .add => .strcat,
-            // .mul => .strrep,
+            // TODO: validate r type
+            .add => return self.callRuntimeArgs(.strcat, dst, &.{ l, r }),
+            .mul => return self.callRuntimeArgs(.strrep, dst, &.{ l, r }),
             else => unreachable,
         },
         else => unreachable,
     };
 
-    const l = self.register_map.get(binary.l).?;
-    const r = self.register_map.get(binary.r).?;
-    if (self.rangeEnd(binary.l) == inst) self.deallocate(l);
-    if (self.rangeEnd(binary.r) == inst) self.deallocate(r);
-
-    const dst = try self.allocate();
-    try self.register_map.put(self.arena, inst, dst);
     try self.addBinary(tag, dst, l, r);
 }
 

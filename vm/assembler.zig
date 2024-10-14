@@ -83,7 +83,7 @@ pub const Assembler = struct {
         .{ .opcode = .pop_multi, .words = 2, .generator = popMulti, .next = .none },
         .{ .opcode = .call_init, .words = 3, .generator = callInit, .next = .none },
         .{ .opcode = .call_fast, .words = 3, .generator = callFast, .next = .none },
-        .{ .opcode = .callrt, .words = 3, .generator = callrt, .next = .none },
+        .{ .opcode = .callrt, .words = 3, .generator = callrt, .next = .default },
         .{ .opcode = .br, .words = 3, .generator = br, .next = .none },
         .{ .opcode = .jmp, .words = 2, .generator = jmp, .next = .none },
         .{ .opcode = .ret, .words = 2, .generator = ret, .next = .none },
@@ -101,11 +101,6 @@ pub const Assembler = struct {
         .{ .id = .attr_insert, .args = .{ .ptr, .ptr, .int }, .ret = .int },
         .{ .id = .attr_load, .args = .{ .ptr, .int }, .ret = .int },
         .{ .id = .attr_store, .args = .{ .ptr, .int, .int }, .ret = .void },
-    };
-
-    pub const ContextFields = enum(u32) {
-        ipool = 0,
-        global = 1,
     };
 
     const ContextLayout = struct {
@@ -794,7 +789,6 @@ pub const Assembler = struct {
 
         // exit block - first phi on the miss to use the correct value of index
         const phi = self.builder.phi(self.ctx.int(32), "index.phi");
-        // _ = entry_block;
         c.LLVMAddIncoming(@ptrCast(phi), @constCast(@ptrCast(&new_index)), @constCast(@ptrCast(&miss_block)), 1);
         c.LLVMAddIncoming(@ptrCast(phi), @constCast(@ptrCast(&index)), @constCast(@ptrCast(&entry_block)), 1);
         index = phi;
@@ -1113,14 +1107,13 @@ pub const Assembler = struct {
         const ctx = self.param(.ctx);
         const builtin_id = self.read(self.offset(1), .none, "builtin.id");
         const return_register = self.read(self.offset(2), .sext, "ret.reg");
+        const gep = self.builder.gep(.inbounds, self.ctx.int(64), fp, &.{return_register}, "ret.reg.ptr");
 
         // call the runtime dispatcher
-        const args = .{ builtin_id, fp, sp, ctx };
+        const args = .{ builtin_id, gep, sp, ctx };
         const dispatcher = self.module.getNamedFunction("rt_dispatch");
         const handler_call = self.builder.call(dispatcherType(self.ctx), dispatcher, &args, "");
         c.LLVMSetInstructionCallConv(@ptrCast(handler_call), c.LLVMCCallConv);
-
-        _ = return_register;
     }
 
     fn br(self: *Assembler) !void {
