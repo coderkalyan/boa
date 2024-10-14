@@ -719,7 +719,6 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
             else => unreachable,
         },
         .str => switch (self.ir.instTag(inst)) {
-            // TODO: validate r type
             .add => return self.callRuntimeArgs(.strcat, dst, &.{ l, r }),
             .mul => return self.callRuntimeArgs(.strrep, dst, &.{ l, r }),
             else => unreachable,
