@@ -5,9 +5,3 @@ def fib(n: int):
         return fib(n - 1) + fib(n - 2)
 
 print(fib(32))
-
-# foo = 1
-# def main():
-#     local = foo
-#
-# main()
