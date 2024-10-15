@@ -28,7 +28,9 @@ scratch: std.ArrayListUnmanaged(u32),
 order: []const Ir.BlockIndex,
 phis: []const std.ArrayListUnmanaged(PrePass.PhiMarker),
 ranges: []const Ir.Index,
+// TODO: this can probably be cleaned up
 patch: []std.ArrayListUnmanaged(Patch),
+inverts: std.AutoHashMapUnmanaged(Ir.Index, u32),
 block_starts: std.AutoHashMapUnmanaged(Ir.BlockIndex, u32),
 constants: std.ArrayListUnmanaged(*anyopaque),
 constant_map: std.AutoHashMapUnmanaged(InternPool.Index, u32),
@@ -72,6 +74,7 @@ pub fn assemble(
         .phis = prepass.phis,
         .ranges = prepass.ranges,
         .patch = patch,
+        .inverts = .{},
         .block_starts = .{},
         .constants = .{},
         .constant_map = .{},
@@ -387,7 +390,15 @@ fn addUnary(self: *Assembler, opcode: Opcode, dst: Register, src: Register) !voi
     });
 }
 
-fn addBinary(self: *Assembler, opcode: Opcode, dst: Register, src1: Register, src2: Register) !void {
+fn addBinary(self: *Assembler, opcode: Opcode, dst: Register, src1: Register, src2: Register, ir_inst: Ir.Index) !void {
+    switch (opcode) {
+        .ieq, .ine, .ilt, .igt, .ile, .ige, .flt, .fgt, .fle, .fge => {
+            const bc_inst: u32 = @intCast(self.code.items.len);
+            try self.inverts.put(self.arena, ir_inst, bc_inst);
+        },
+        else => {},
+    }
+
     try self.code.appendSlice(self.gpa, &.{
         @intFromEnum(opcode),
         dst,
@@ -728,7 +739,7 @@ fn binaryOp(self: *Assembler, inst: Ir.Index) !void {
         else => unreachable,
     };
 
-    try self.addBinary(tag, dst, l, r);
+    try self.addBinary(tag, dst, l, r, inst);
 }
 
 fn unaryOp(self: *Assembler, inst: Ir.Index) !void {
@@ -775,11 +786,41 @@ fn br(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, next_block
     const operand = self.register_map.get(payload.op).?;
     if (self.rangeEnd(payload.op) == inst) self.deallocate(operand);
 
-    // TODO: an optimization here is to negate the operand if needed, both to save
-    // on the .lnot and to order better and maximize fallthrough
-    const inv = try self.allocate();
-    _ = try self.addUnary(.lnot, inv, operand);
-    self.deallocate(inv);
+    // we branch on the inverted form of the instruction, but if the conditions
+    // are right, we can flip the instruction in place
+    var in_place = false;
+    if (self.rangeEnd(payload.op) == inst) {
+        in_place = switch (self.ir.instTag(payload.op)) {
+            .eq, .ne, .lt, .gt, .le, .ge => true,
+            else => false,
+        };
+    }
+
+    const inv = if (in_place) reg: {
+        const bc_inst = self.inverts.get(payload.op).?;
+        const old_opcode: Bytecode.Opcode = @enumFromInt(self.code.items[bc_inst]);
+        const new_inst: Bytecode.Opcode = switch (old_opcode) {
+            .ieq => .ine,
+            .ine => .ieq,
+            .ilt => .ige,
+            .igt => .ile,
+            .ile => .igt,
+            .ige => .ilt,
+            .flt => .fge,
+            .fgt => .fle,
+            .fle => .fgt,
+            .fge => .flt,
+            else => unreachable,
+        };
+
+        self.code.items[bc_inst] = @intFromEnum(new_inst);
+        break :reg operand;
+    } else reg: {
+        const inv = try self.allocate();
+        _ = try self.addUnary(.lnot, inv, operand);
+        self.deallocate(inv);
+        break :reg inv;
+    };
 
     {
         const bc_inst = try self.reserveBranch(inv);
