@@ -75,6 +75,13 @@ pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
     const ir_index = ipool.createIr(ir_data) catch unreachable;
     fi.ir = ipool.irPtr(ir_index);
 
+    // {
+    //     const ir = fi.ir;
+    //     const ir_renderer = render.IrRenderer(2, @TypeOf(std.io.getStdOut().writer()));
+    //     var renderer = ir_renderer.init(std.io.getStdOut().writer(), ctx.gpa, ir);
+    //     renderer.render() catch unreachable;
+    // }
+
     const bc_data = Assembler.assemble(ctx.gpa, ipool, fi.ir) catch unreachable;
     const bc_index = ipool.createBytecode(bc_data) catch unreachable;
     // TODO: this needs to be fixed

@@ -889,7 +889,8 @@ pub const Assembler = struct {
     fn lnot(self: *Assembler) !void {
         const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .integer, "src");
         const zero = self.iconst(0);
-        const not = self.builder.icmp(.eq, src, zero, "lnot");
+        var not = self.builder.icmp(.eq, src, zero, "lnot");
+        not = self.builder.cast(.zext, not, self.ctx.int(64), "lnot.zext");
         self.store(self.read(self.offset(1), .sext, "dst.reg"), not, .integer, "dst");
     }
 
@@ -898,8 +899,8 @@ pub const Assembler = struct {
             fn generator(self: *Assembler) !void {
                 const src1 = self.load(self.read(self.offset(2), .sext, "src1.reg"), kind, "src1");
                 const src2 = self.load(self.read(self.offset(3), .sext, "src2.reg"), kind, "src2");
-                const inv = self.builder.binary(opcode, src1, src2, "binary");
-                self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, kind, "dst");
+                const binary = self.builder.binary(opcode, src1, src2, "binary");
+                self.store(self.read(self.offset(1), .sext, "dst.reg"), binary, kind, "dst");
             }
         }.generator;
     }
@@ -909,8 +910,9 @@ pub const Assembler = struct {
             fn generator(self: *Assembler) !void {
                 const src1 = self.load(self.read(self.offset(2), .sext, "src1.reg"), .integer, "src1");
                 const src2 = self.load(self.read(self.offset(3), .sext, "src2.reg"), .integer, "src2");
-                const inv = self.builder.icmp(predicate, src1, src2, "binary");
-                self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, .integer, "dst");
+                var cond = self.builder.icmp(predicate, src1, src2, "cond");
+                cond = self.builder.cast(.zext, cond, self.ctx.int(64), "cond.zext");
+                self.store(self.read(self.offset(1), .sext, "dst.reg"), cond, .integer, "dst");
             }
         }.generator;
     }
@@ -920,8 +922,9 @@ pub const Assembler = struct {
             fn generator(self: *Assembler) !void {
                 const src1 = self.load(self.read(self.offset(2), .sext, "src1.reg"), .double, "src1");
                 const src2 = self.load(self.read(self.offset(3), .sext, "src2.reg"), .double, "src2");
-                const inv = self.builder.fcmp(predicate, src1, src2, "binary");
-                self.store(self.read(self.offset(1), .sext, "dst.reg"), inv, .integer, "dst");
+                var cond = self.builder.fcmp(predicate, src1, src2, "cond");
+                cond = self.builder.cast(.zext, cond, self.ctx.int(64), "cond.zext");
+                self.store(self.read(self.offset(1), .sext, "dst.reg"), cond, .integer, "dst");
             }
         }.generator;
     }

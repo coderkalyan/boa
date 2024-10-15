@@ -153,3 +153,7 @@ pub fn call(bb: *BlockBuilder, ptr: Index, args: []const Index) !Index {
         },
     });
 }
+
+pub fn last(bb: *BlockBuilder) Index {
+    return bb.insts.items[bb.insts.items.len - 1];
+}

@@ -41,8 +41,8 @@ const Context = struct {
                 .br => {
                     const extra = ir.instPayload(inst).unary_extra.extra;
                     const branch = ir.extraData(Ir.Inst.Branch, extra);
-                    const temp = try self.recordPostOrderDfs(branch.exec_if, i);
-                    break :n try self.recordPostOrderDfs(branch.exec_else, temp);
+                    const temp = try self.recordPostOrderDfs(branch.exec_else, i);
+                    break :n try self.recordPostOrderDfs(branch.exec_if, temp);
                 },
                 .ret => i,
                 else => unreachable,
@@ -173,10 +173,15 @@ pub fn analyze(arena: Allocator, ir: *const Ir, entry: BlockIndex) !PrePass {
     };
 
     @memset(context.visited, false);
-    _ = try context.recordPostOrderDfs(entry, ir.blocks.len);
+    const last = try context.recordPostOrderDfs(entry, ir.blocks.len);
+
+    // filter out unreachable blocks
+    const out_order = try arena.alloc(BlockIndex, order.len - last);
+    @memcpy(out_order, order[last..]);
+    // std.debug.print("{any}\n", .{out_order});
 
     return .{
-        .order = order,
+        .order = out_order,
         .phis = phis,
         .ranges = ranges,
     };

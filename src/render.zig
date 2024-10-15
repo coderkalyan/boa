@@ -6,6 +6,7 @@ const Bytecode = @import("bc/Bytecode.zig");
 const InternPool = @import("InternPool.zig");
 const Liveness = @import("ir/Liveness.zig");
 const Type = @import("type.zig").Type;
+const builtins = @import("rt/builtins.zig");
 const Allocator = std.mem.Allocator;
 
 const io = std.io;
@@ -495,6 +496,11 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try writer.print("x{}, x{}\n", .{ target, ret });
                     pc += 1;
                 },
+                .callrt => {
+                    const id: builtins.Id = @enumFromInt(self.readWord(&pc));
+                    const ret = self.readWord(&pc);
+                    try writer.print("{s}, x{}\n", .{ @tagName(id), ret });
+                },
                 .push_one => {
                     const arg = self.readWord(&pc);
                     try writer.print("x{}\n", .{arg});
@@ -518,7 +524,6 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
                     try writer.print("x{}\n", .{val});
                 },
                 .trap => {},
-                .callrt => unreachable, // TODO
             }
             return pc;
         }

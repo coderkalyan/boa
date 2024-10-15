@@ -303,7 +303,9 @@ fn ifSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     ig.current_builder = if_builder;
     var inner_if = Scope.Block.init(ig, scope);
     try ig.blockInner(&inner_if.base, if_simple.exec_true);
-    _ = try ig.current_builder.jmp(exit_builder.index);
+    if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+        _ = try ig.current_builder.jmp(exit_builder.index);
+    }
     const exec_if = try ig.current_builder.seal();
 
     ig.current_builder = exit_builder;
@@ -329,13 +331,17 @@ fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     ig.current_builder = if_builder;
     var inner_if = Scope.Block.init(ig, scope);
     try ig.blockInner(&inner_if.base, exec.exec_true);
-    _ = try ig.current_builder.jmp(exit_builder.index);
+    if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+        _ = try ig.current_builder.jmp(exit_builder.index);
+    }
     const exec_if = try ig.current_builder.seal();
 
     ig.current_builder = else_builder;
     var inner_else = Scope.Block.init(ig, scope);
     try ig.blockInner(&inner_else.base, exec.exec_false);
-    _ = try ig.current_builder.jmp(exit_builder.index);
+    if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+        _ = try ig.current_builder.jmp(exit_builder.index);
+    }
     const exec_else = try ig.current_builder.seal();
 
     ig.current_builder = exit_builder;

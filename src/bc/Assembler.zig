@@ -205,8 +205,10 @@ fn patchInst(self: *Assembler, current_block: Ir.BlockIndex, loc: u32, patch: Pa
         .jmp => self.updateJump(patch.bc_inst, offset),
         .br => {
             const branch = ir.extraData(Ir.Inst.Branch, payload.unary_extra.extra);
-            if (branch.exec_if == current_block) {
+            if (branch.exec_else == current_block) {
                 self.updateBranch(patch.bc_inst, offset);
+            } else if (branch.exec_if == current_block) {
+                self.updateJump(patch.bc_inst, offset);
             }
         },
         .phi => {
@@ -773,9 +775,19 @@ fn br(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, next_block
     const operand = self.register_map.get(payload.op).?;
     if (self.rangeEnd(payload.op) == inst) self.deallocate(operand);
 
-    // TODO: an easy optimization here is to negate the operand if needed
+    // TODO: an optimization here is to negate the operand if needed, both to save
+    // on the .lnot and to order better and maximize fallthrough
+    const inv = try self.allocate();
+    _ = try self.addUnary(.lnot, inv, operand);
+    self.deallocate(inv);
+
+    {
+        const bc_inst = try self.reserveBranch(inv);
+        try self.markPatch(current_block, branch.exec_else, inst, bc_inst);
+    }
+
     if (branch.exec_if != next_block) {
-        const bc_inst = try self.reserveBranch(operand);
+        const bc_inst = try self.reserveJump();
         try self.markPatch(current_block, branch.exec_if, inst, bc_inst);
     }
 }
