@@ -71,6 +71,11 @@ pub const Context = extern opaque {
         return LLVMFunctionType(return_type, param_types.ptr, @intCast(param_types.len), @intFromBool(is_var_arg));
     }
 
+    extern fn LLVMStructTypeInContext(ctx: *Context, element_types: [*]const *Type, element_count: c_uint, pack: Bool) *Type;
+    pub inline fn @"struct"(ctx: *Context, element_types: []const *Type, pack: bool) *Type {
+        return LLVMStructTypeInContext(ctx, element_types.ptr, @intCast(element_types.len), @intFromBool(pack));
+    }
+
     extern fn LLVMVoidTypeInContext(ctx: *Context) *Type;
     pub const @"void" = LLVMVoidTypeInContext;
 

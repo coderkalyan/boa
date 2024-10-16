@@ -132,7 +132,7 @@ fn startBlock(self: *Assembler, block: Ir.BlockIndex) !void {
 fn endBlock(self: *Assembler, block: Ir.BlockIndex) !void {
     const c = @intFromEnum(block);
     for (self.phis[c].items) |phi_marker| {
-        // if (self.elideInst(phi_marker.phi)) continue;
+        if (self.elideInst(phi_marker.phi)) continue;
         const src = self.register_map.get(phi_marker.operand).?;
         const mov = try self.reserveMov(src);
         try self.markPatch(block, phi_marker.dest_block, phi_marker.phi, mov);
@@ -146,8 +146,9 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
     // however it is good at cleaning up "useless" instructions, especially phis
     // at branch/loop exits which are used to export local variables across scopes,
     // if they aren't used
-    // TODO: needs to drop dead operands
-    // if (self.elideInst(inst)) return;
+    if (self.elideInst(inst)) {
+        return;
+    }
 
     const index = @intFromEnum(inst);
     switch (ir.insts.items(.tag)[index]) {
@@ -282,10 +283,71 @@ fn elideInst(self: *Assembler, inst: Ir.Index) bool {
     // instructions with side effects (like writing to memory or
     // changing control flow) cannot be elided
     // otherwise, instructions that die immediately (never use) are elided
-    return switch (self.ir.instTag(inst)) {
-        .br, .jmp, .ret => false,
+    const unused = switch (self.ir.instTag(inst)) {
+        .br, .jmp, .ret, .call, .st_global => false,
         else => self.rangeEnd(inst) == inst,
     };
+    if (!unused) return false;
+
+    switch (self.ir.instTag(inst)) {
+        .constant, .arg, .builtin => {},
+        .ld_global,
+        .itof,
+        .ftoi,
+        .itob,
+        .btoi,
+        .any,
+        .neg,
+        .binv,
+        .lnot,
+        => {
+            const unary = self.ir.instPayload(inst).unary;
+            const operand = self.register_map.get(unary).?;
+            if (self.rangeEnd(unary) == inst) self.deallocate(operand);
+        },
+        .add,
+        .sub,
+        .mul,
+        .div,
+        .mod,
+        .pow,
+        .bor,
+        .band,
+        .bxor,
+        .sll,
+        .sra,
+        .eq,
+        .ne,
+        .lt,
+        .gt,
+        .le,
+        .ge,
+        => {
+            const binary = self.ir.instPayload(inst).binary;
+            const l = self.register_map.get(binary.l).?;
+            const r = self.register_map.get(binary.r).?;
+            if (self.rangeEnd(binary.l) == inst) self.deallocate(l);
+            if (self.rangeEnd(binary.r) == inst) self.deallocate(r);
+        },
+        // .call => {
+        // const payload = self.ir.instPayload(inst).unary_extra;
+        // const ptr = payload.op;
+        // const slice = self.ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+        // const src_args: []const Ir.Index = @ptrCast(self.ir.extraSlice(slice));
+        //
+        // const target = self.register_map.get(ptr).?;
+        // if (self.rangeEnd(ptr) == inst) self.deallocate(target);
+        // for (src_args) |src_arg| {
+        //     const arg = self.register_map.get(src_arg).?;
+        //     if (self.rangeEnd(src_arg) == inst) self.deallocate(arg);
+        // }
+        // },
+        .phi => {},
+        .st_global, .call => unreachable,
+        .ret, .jmp, .br => unreachable,
+    }
+
+    return true;
 }
 
 const Immediate = union(enum) {

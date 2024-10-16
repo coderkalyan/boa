@@ -119,8 +119,7 @@ pub const Assembler = struct {
                 ctx.ptr(address_space),
             };
 
-            const struct_type = c.LLVMStructTypeInContext(@ptrCast(ctx), @constCast(@ptrCast(fields.ptr)), @intCast(fields.len), @intFromBool(false));
-            return @ptrCast(struct_type);
+            return ctx.@"struct"(fields, false);
         }
 
         pub fn fieldPtr(as: *Assembler, base: *Value, comptime field: Field) *Value {
@@ -158,8 +157,7 @@ pub const Assembler = struct {
                 ctx.int(32),
             };
 
-            const struct_type = c.LLVMStructTypeInContext(@ptrCast(ctx), @constCast(@ptrCast(fields.ptr)), @intCast(fields.len), @intFromBool(false));
-            return @ptrCast(struct_type);
+            return ctx.@"struct"(fields, false);
         }
 
         pub fn fieldPtr(as: *Assembler, base: *Value, comptime field: Field) *Value {
@@ -220,7 +218,7 @@ pub const Assembler = struct {
         const ptr_size = c.LLVMABISizeOfType(target_data, @ptrCast(ctx.ptr(address_space)));
 
         inline for (builtins) |builtin| {
-            declareBuiltin(ctx, module, builder, builtin);
+            declareBuiltin(ctx, module, builtin);
         }
 
         declareJumpTable(ctx, module, handlers.len);
@@ -290,7 +288,7 @@ pub const Assembler = struct {
             // gca (don't care)
         };
 
-        return @ptrCast(c.LLVMStructTypeInContext(@ptrCast(ctx), @ptrCast(field_types.ptr), @intCast(field_types.len), @intFromBool(false)));
+        return ctx.@"struct"(field_types, false);
     }
 
     fn builtinTypeInner(ctx: *Context, kind: anytype) *Type {
@@ -404,61 +402,11 @@ pub const Assembler = struct {
         c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMCCallConv);
     }
 
-    fn declareBuiltin(ctx: *Context, module: *Module, builder: *Builder, builtin: anytype) void {
-        // both these handlers are weakly linked to internal "no op" implementations
-        // to make testing easier
-
-        // direct call builtin
-        {
-            const builtin_type = builtinType(ctx, builtin);
-            const name = "rt_" ++ @tagName(builtin.id);
-            const handler = module.addFunction(name, builtin_type);
-            c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMCCallConv);
-
-            // const entry_block = BasicBlock.append(ctx, handler, "entry");
-            // builder.positionAtEnd(entry_block);
-            _ = builder;
-        }
-
-        // indirect call (pops args from stack)
-        // {
-        //     const name = "rti_" ++ @tagName(builtin.id);
-        //     const handler = module.addFunction(name, handlerType(ctx));
-        //
-        //     const nonnull = "nonnull";
-        //     const readonly = "readonly";
-        //
-        //     // instruction pointer attributes: nonnull, readonly, dereferenceable(words), align 4
-        //     const ip_param_index = @intFromEnum(Param.ip);
-        //     const ip_param = handler.param(ip_param_index);
-        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), ip_param_index + 1, enumAttribute(ctx, nonnull, null));
-        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), ip_param_index + 1, enumAttribute(ctx, readonly, null));
-        //     c.LLVMSetParamAlignment(@ptrCast(ip_param), 4);
-        //     c.LLVMSetValueName2(@ptrCast(ip_param), "ip", "ip".len);
-        //
-        //     // frame pointer attributes: nonnull, align 8
-        //     const fp_param_index = @intFromEnum(Param.fp);
-        //     const fp_param = c.LLVMGetParam(@ptrCast(handler), fp_param_index);
-        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), fp_param_index + 1, enumAttribute(ctx, nonnull, null));
-        //     c.LLVMSetParamAlignment(fp_param, 8);
-        //     c.LLVMSetValueName2(fp_param, "fp", "fp".len);
-        //
-        //     // stack pointer attributes: nonnull, align 8
-        //     const sp_param_index = @intFromEnum(Param.sp);
-        //     const sp_param = c.LLVMGetParam(@ptrCast(handler), sp_param_index);
-        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), sp_param_index + 1, enumAttribute(ctx, nonnull, null));
-        //     c.LLVMSetParamAlignment(sp_param, 8);
-        //     c.LLVMSetValueName2(sp_param, "sp", "sp".len);
-        //
-        //     // ctx pointer attributes: nonnull, align 8
-        //     const ctx_param_index = @intFromEnum(Param.ctx);
-        //     const ctx_param = c.LLVMGetParam(@ptrCast(handler), ctx_param_index);
-        //     c.LLVMAddAttributeAtIndex(@ptrCast(handler), ctx_param_index + 1, enumAttribute(ctx, nonnull, null));
-        //     c.LLVMSetParamAlignment(ctx_param, 8);
-        //     c.LLVMSetValueName2(ctx_param, "ctx", "ctx".len);
-        //
-        //     c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMCCallConv);
-        // }
+    fn declareBuiltin(ctx: *Context, module: *Module, builtin: anytype) void {
+        const builtin_type = builtinType(ctx, builtin);
+        const name = "rt_" ++ @tagName(builtin.id);
+        const handler = module.addFunction(name, builtin_type);
+        c.LLVMSetFunctionCallConv(@ptrCast(handler), c.LLVMCCallConv);
     }
 
     fn enumAttribute(ctx: *Context, name: []const u8, val: ?u32) c.LLVMAttributeRef {
