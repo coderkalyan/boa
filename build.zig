@@ -68,6 +68,9 @@ pub fn build(b: *std.Build) void {
     // Add the generated interpreter to the executable source.
     exe.addAssemblyFile(interpreter_s);
 
+    exe.linkLibC();
+    exe.linkSystemLibrary("LLVM-18");
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).

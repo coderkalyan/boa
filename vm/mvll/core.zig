@@ -8,7 +8,16 @@ pub const YieldCallback = *const fn (*Context, *anyopaque) void;
 // zig bool.
 const Bool = c_int;
 
-pub const MemoryBuffer = extern opaque {};
+pub const MemoryBuffer = extern opaque {
+    extern fn LLVMGetBufferStart(buf: *const MemoryBuffer) [*]u8;
+    pub const start = LLVMGetBufferStart;
+
+    extern fn LLVMGetBufferSize(buf: *const MemoryBuffer) usize;
+    pub const size = LLVMGetBufferSize;
+
+    extern fn LLVMDisposeMemoryBuffer(buf: *MemoryBuffer) void;
+    pub const deinit = LLVMDisposeMemoryBuffer;
+};
 
 pub const Context = extern opaque {
     extern fn LLVMContextCreate() *Context;
@@ -118,7 +127,7 @@ pub const Module = extern opaque {
 
     extern fn LLVMPrintModuleToFile(module: *Module, filename: [*:0]const u8, msg: *[*:0]const u8) Bool;
     pub inline fn printToFile(module: *Module, filename: [:0]const u8) !void {
-        var msg: *?[*:0]const u8 = null;
+        var msg: [*:0]const u8 = undefined;
         // TODO: dispose
         // errdefer LLVMDisposeMessage(msg);
 

@@ -9,6 +9,7 @@ const types = @import("types.zig");
 const render = @import("../render.zig");
 const Object = @import("object.zig").Object;
 const String = @import("string.zig").String;
+const Compiler = @import("../lljit/Compiler.zig");
 
 const Context = types.Context;
 const FunctionInfo = types.FunctionInfo;
@@ -97,6 +98,8 @@ pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
         var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), ctx.gpa, ipool, code);
         renderer.render() catch unreachable;
     }
+
+    Compiler.compile(ctx.gpa, ipool, fi.ir) catch unreachable;
 
     fi.state = .interpreted;
 }
