@@ -1,20 +1,17 @@
-const std = @import("std");
-const lex = @import("lex.zig");
-const parse = @import("parse.zig");
-const InternPool = @import("InternPool.zig");
-const Scope = @import("ir/Scope.zig");
-const IrGen = @import("ir/IrGen.zig");
-const PageBumpAllocator = @import("PageBumpAllocator.zig");
-const Shape = @import("rt/Shape.zig");
-const GarbageCollector = @import("rt/GarbageCollector.zig");
+// frontend
+pub const lex = @import("lex.zig");
+pub const parse = @import("parse.zig");
+pub const Ast = @import("Ast.zig");
 
-comptime {
-    _ = lex;
-    _ = parse;
-    _ = InternPool;
-    _ = Scope;
-    _ = IrGen;
-    _ = PageBumpAllocator;
-    _ = Shape;
-    _ = GarbageCollector;
-}
+// intern pool and cache
+pub const InternPool = @import("InternPool.zig");
+
+// ir generation
+pub const Ir = @import("ir/Ir.zig");
+pub const IrGen = @import("ir/IrGen.zig");
+pub const Type = @import("type.zig").Type;
+pub const value = @import("value.zig");
+
+// bytecode and interpreter
+pub const Bytecode = @import("bc/Bytecode.zig");
+pub const Assembler = @import("bc/Assembler.zig");

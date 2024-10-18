@@ -77,7 +77,7 @@ test "allocate" {
     const int_ptr = try pba.create(u32);
     int_ptr.* = 0xcafeb0ba;
 
-    const String = @import("rt/string.zig").String;
+    const String = @import("string.zig").String;
     const string = try String.init(pba, "Hello, world!");
     try std.testing.expect(std.mem.eql(u8, string.bytes(), "Hello, world!"));
 
