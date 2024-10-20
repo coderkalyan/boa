@@ -1,17 +1,11 @@
 const std = @import("std");
-const Ast = @import("../Ast.zig");
-const Ir = @import("../ir/Ir.zig");
-const IrGen = @import("../ir/IrGen.zig");
-const InternPool = @import("../InternPool.zig");
-const Bytecode = @import("../bc/Bytecode.zig");
-const Assembler = @import("../bc/Assembler.zig");
 const types = @import("types.zig");
-const render = @import("../render.zig");
 const Object = @import("object.zig").Object;
 const String = @import("string.zig").String;
 
 const Context = types.Context;
 const FunctionInfo = types.FunctionInfo;
+const InternPool = types.InternPool;
 
 pub const Id = enum(i32) {
     print1_int,
@@ -65,40 +59,6 @@ export fn dispatch(in_id: u32, ret: *i64, sp: [*]i64, ctx: *Context) callconv(.C
             ret.* = @intCast(op.len);
         },
     }
-}
-
-pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
-    if (fi.state != .lazy) return;
-
-    const ipool = ctx.ipool;
-    const ir_data = IrGen.generate(.function, ctx.gpa, ipool, fi.tree, fi.node) catch unreachable;
-    const ir_index = ipool.createIr(ir_data) catch unreachable;
-    fi.ir = ipool.irPtr(ir_index);
-
-    {
-        const ir = fi.ir;
-        const ir_renderer = render.IrRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-        var renderer = ir_renderer.init(std.io.getStdOut().writer(), ctx.gpa, ir);
-        renderer.render() catch unreachable;
-    }
-
-    const bc_data = Assembler.assemble(ctx.gpa, ipool, fi.ir) catch unreachable;
-    const bc_index = ipool.createBytecode(bc_data) catch unreachable;
-    // TODO: this needs to be fixed
-    // TODO: but i forgot why
-    fi.bytecode = ipool.bytecodePtr(bc_index).code.ptr;
-    fi.frame_size = ipool.bytecodePtr(bc_index).frame_size;
-
-    {
-        const code = ipool.bytecodePtr(bc_index);
-        std.debug.print("bytecode listing for function: {}\n", .{code.code.len});
-        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(std.io.getStdOut().writer()));
-        // _ = bytecode_renderer;
-        var renderer = bytecode_renderer.init(std.io.getStdOut().writer(), ctx.gpa, ipool, code);
-        renderer.render() catch unreachable;
-    }
-
-    fi.state = .interpreted;
 }
 
 pub fn attrIndex(object: *Object, in_attr: u64) callconv(.C) i64 {

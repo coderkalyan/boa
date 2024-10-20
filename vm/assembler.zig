@@ -138,12 +138,9 @@ pub const Assembler = struct {
         // state: u32,
 
         const Field = enum(u32) {
-            tree = 0,
-            ir = 1,
-            bytecode = 2,
-            node = 3,
-            frame_size = 4,
-            state = 5,
+            comp = 0,
+            bytecode = 1,
+            frame_size = 2,
         };
 
         pub fn structType(as: *Assembler) *Type {

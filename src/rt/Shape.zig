@@ -1,7 +1,8 @@
 const std = @import("std");
-const InternPool = @import("../InternPool.zig");
+const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
+const InternPool = types.InternPool;
 const Shape = @This();
 
 // how to interpret the transitions pointer

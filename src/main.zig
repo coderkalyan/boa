@@ -7,16 +7,13 @@ const IrGen = @import("ir/IrGen.zig");
 const Assembler = @import("bc/Assembler.zig");
 const InternPool = @import("InternPool.zig");
 const render = @import("render.zig");
-// const Interpreter = @import("rt/Interpreter.zig");
 const Bytecode = @import("bc/Bytecode.zig");
 const Object = @import("rt/object.zig").Object;
 const Shape = @import("rt/Shape.zig");
 const PageBumpAllocator = @import("PageBumpAllocator.zig");
 const types = @import("rt/types.zig");
-// const builtins = @import("rt/builtins.zig");
-// const builtins = @import("interpreter/builtins.zig");
-// const builtins_impl = @import("rt/builtins_impl.zig");
 const builtins = @import("rt/builtins.zig");
+const compile = @import("compile.zig");
 
 const posix = std.posix;
 const Node = Ast.Node;
@@ -134,14 +131,19 @@ pub fn interpret(
     );
 
     const function = pool.functionPtr(pool.get(fi_ip).function);
-    const fi_ptr = try pba.create(types.FunctionInfo);
-    fi_ptr.* = .{
+    const comp = try pba.create(compile.CompilationInfo);
+    comp.* = .{
         .tree = function.tree,
         .ir = pool.irPtr(function.ir),
-        .bytecode = pool.bytecodePtr(function.bytecode).code.ptr,
+        .bytecode = pool.bytecodePtr(function.bytecode),
         .node = function.node,
-        .frame_size = pool.bytecodePtr(function.bytecode).frame_size,
         .state = .interpreted,
+    };
+    const fi_ptr = try pba.create(types.FunctionInfo);
+    fi_ptr.* = .{
+        .comp = @ptrCast(@alignCast(comp)),
+        .bytecode = comp.bytecode.code.ptr,
+        .frame_size = comp.bytecode.frame_size,
     };
 
     const fi_ldw: i64 = @bitCast(@intFromPtr(fi_ptr));
@@ -168,7 +170,7 @@ pub fn interpret(
     const sp = fp + entry_bc.frame_size;
 
     var context: types.Context = .{
-        .ipool = pool,
+        .ipool = @ptrCast(@alignCast(pool)),
         .global = global,
         .gpa = gpa,
         .pba = pba,
@@ -179,7 +181,7 @@ pub fn interpret(
 }
 
 comptime {
-    @export(builtins.compile, .{ .name = "rt_compile", .linkage = .strong });
+    @export(compile.compile, .{ .name = "rt_compile", .linkage = .strong });
     @export(builtins.dispatch, .{ .name = "rt_dispatch", .linkage = .strong });
     @export(builtins.attrIndex, .{ .name = "rt_attr_index", .linkage = .strong });
     @export(builtins.attrInsert, .{ .name = "rt_attr_insert", .linkage = .strong });

@@ -1,8 +1,4 @@
 const std = @import("std");
-const Ast = @import("../Ast.zig");
-const Ir = @import("../ir/Ir.zig");
-const InternPool = @import("../InternPool.zig");
-const Bytecode = @import("../bc/Bytecode.zig");
 const Object = @import("object.zig").Object;
 
 const Allocator = std.mem.Allocator;
@@ -16,18 +12,14 @@ pub const Context = struct {
     gca: Allocator,
 };
 
-pub const FunctionInfo = extern struct {
-    tree: *const Ast,
-    ir: *const Ir,
-    bytecode: [*]const i32,
-    node: Ast.Node.Index,
-    frame_size: u32,
-    state: State,
+pub const CompilationInfo = opaque {};
 
-    pub const State = enum(u32) {
-        lazy,
-        interpreted,
-        optimized_lite,
-        optimized_full,
-    };
+pub const FunctionInfo = extern struct {
+    comp: *CompilationInfo,
+    bytecode: [*]i32,
+    frame_size: u32,
+};
+
+pub const InternPool = opaque {
+    pub const Index = enum(u32) { _ };
 };

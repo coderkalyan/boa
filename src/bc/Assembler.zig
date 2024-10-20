@@ -7,6 +7,7 @@ const Liveness = @import("../ir/Liveness.zig");
 const String = @import("../rt/string.zig").String;
 const types = @import("../rt/types.zig");
 const builtins = @import("../rt/builtins.zig");
+const compile = @import("../compile.zig");
 
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
@@ -392,23 +393,29 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
         // TODO: this should happen at "runtime" through callrt
         .function => |fi| ptr: {
             const function = pool.functionPtr(fi);
-            const state: FunctionInfo.State = switch (function.state) {
+            const state: compile.CompilationInfo.State = switch (function.state) {
                 .lazy => .lazy,
                 .interpreted => .interpreted,
                 .optimized_lite => .optimized_lite,
                 .optimized_full => .optimized_full,
             };
             const ir = if (function.state == .lazy) undefined else pool.irPtr(function.ir);
-            const bytecode = if (function.state == .lazy) undefined else pool.bytecodePtr(function.bytecode).code.ptr;
+            const bytecode = if (function.state == .lazy) undefined else pool.bytecodePtr(function.bytecode);
+            const code = if (function.state == .lazy) undefined else pool.bytecodePtr(function.bytecode).code.ptr;
             const frame_size = if (function.state == .lazy) undefined else pool.bytecodePtr(function.bytecode).frame_size;
 
-            const function_info = try self.gpa.create(FunctionInfo);
-            function_info.* = .{
-                .state = state,
-                .node = function.node,
+            const comp = try self.gpa.create(compile.CompilationInfo);
+            comp.* = .{
                 .tree = function.tree,
                 .ir = ir,
                 .bytecode = bytecode,
+                .node = function.node,
+                .state = state,
+            };
+            const function_info = try self.gpa.create(FunctionInfo);
+            function_info.* = .{
+                .comp = @ptrCast(@alignCast(comp)),
+                .bytecode = code,
                 .frame_size = frame_size,
             };
 

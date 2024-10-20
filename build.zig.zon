@@ -22,12 +22,12 @@
     // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
-    .dependencies = .{
-        .mvll = .{
-            .url = "/home/kalyan/Documents/mvll/",
-            .hash = "1220b2a609bdc519d7feb9c87d43033aece0d76e5a6627c3a66090806d83637c509e",
-        },
-    },
+    // .dependencies = .{
+    //     .mvll = .{
+    //         .url = "/home/kalyan/Documents/mvll/",
+    //         .hash = "1220b2a609bdc519d7feb9c87d43033aece0d76e5a6627c3a66090806d83637c509e",
+    //     },
+    // },
     .paths = .{
         "build.zig",
         "build.zig.zon",
