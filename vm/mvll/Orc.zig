@@ -218,3 +218,69 @@ pub const IndirectStubsManager = opaque {};
 pub const LazyCallThroughManager = opaque {};
 
 pub const DumpObjects = opaque {};
+
+pub const LLJITBuilder = opaque {
+    pub const ObjectLinkingLayerCreator = *const fn (ctx: *anyopaque, session: *ExecutionSession, triple: [*:0]const u8) *ObjectLayer;
+
+    extern fn LLVMOrcCreateLLJITBuilder() *LLJITBuilder;
+    pub const init = LLVMOrcCreateLLJITBuilder;
+
+    extern fn LLVMOrcDisposeLLJITBuilder(builder: *LLJITBuilder) void;
+    pub const deinit = LLVMOrcDisposeLLJITBuilder;
+
+    extern fn LLVMOrcLLJITBuilderSetTargetMachineBuilder(builder: *LLJITBuilder, jtmb: *JITTargetMachineBuilder) void;
+    pub const setTargetMachineBuilder = LLVMOrcLLJITBuilderSetTargetMachineBuilder;
+
+    extern fn LLVMOrcLLJITBuilderSetObjectLinkingLayerCreator(builder: *LLJITBuilder, f: ObjectLinkingLayerCreator, ctx: *anyopaque) void;
+    pub const setObjectLinkingLayerCreator = LLVMOrcLLJITBuilderSetObjectLinkingLayerCreator;
+};
+
+pub const LLJIT = opaque {
+    extern fn LLVMOrcCreateLLJIT(out_lljit: *LLJIT, builder: ?*LLJITBuilder) *Error;
+    pub const init = LLVMOrcCreateLLJIT;
+
+    extern fn LLVMOrcDisposeLLJIT(lljit: *LLJIT) *Error;
+    pub const deinit = LLVMOrcDisposeLLJIT;
+
+    extern fn LLVMOrcLLJITGetExecutionSession(lljit: *LLJIT) *ExecutionSession;
+    pub const executionSession = LLVMOrcLLJITGetExecutionSession;
+
+    extern fn LLVMOrcLLJITGetMainJITDylib(lljit: *LLJIT) *JITDylib;
+    pub const mainJITDylib = LLVMOrcLLJITGetMainJITDylib;
+
+    extern fn LLVMOrcLLJITGetTripleString(lljit: *LLJIT) [*:0]const u8;
+    pub const tripleString = LLVMOrcLLJITGetTripleString;
+
+    extern fn LLVMOrcLLJITGetGlobalPrefix(lljit: *LLJIT) u8;
+    pub const globalPrefix = LLVMOrcLLJITGetGlobalPrefix;
+
+    extern fn LLVMOrcLLJITMangleAndIntern(lljit: *LLJIT, name: [*:0]const u8) *SymbolStringPool.Entry;
+    pub const mangleAndIntern = LLVMOrcLLJITMangleAndIntern;
+
+    extern fn LLVMOrcLLJITAddObjectFile(lljit: *LLJIT, dylib: *JITDylib, buffer: *MemoryBuffer) *Error;
+    pub const addObjectFile = LLVMOrcLLJITAddObjectFile;
+
+    extern fn LLVMOrcLLJITAddObjectFileWithRT(lljit: *LLJIT, rt: *ResourceTracker, buffer: *MemoryBuffer) *Error;
+    pub const addObjectFileWithRT = LLVMOrcLLJITAddObjectFileWithRT;
+
+    extern fn LLVMOrcLLJITAddLLVMIRModule(lljit: *LLJIT, dylib: *JITDylib, tsm: *ThreadSafeModule) *Error;
+    pub const addLLVMIrModule = LLVMOrcLLJITAddLLVMIRModule;
+
+    extern fn LLVMOrcLLJITAddLLVMIRModuleWithRT(lljit: *LLJIT, rt: *ResourceTracker, tsm: *ThreadSafeModule) *Error;
+    pub const addLLVMIrModuleWithRT = LLVMOrcLLJITAddLLVMIRModuleWithRT;
+
+    extern fn LLVMOrcLLJITLookup(lljit: *LLJIT, result: *ExecutorAddress, name: [*:0]const u8) *Error;
+    pub const lookup = LLVMOrcLLJITLookup;
+
+    extern fn LLVMOrcLLJITGetObjLinkingLayer(lljit: *LLJIT) *ObjectLayer;
+    pub const objectLayer = LLVMOrcLLJITGetObjLinkingLayer;
+
+    extern fn LLVMOrcLLJITGetObjTranformLayer(lljit: *LLJIT) *ObjectTransformLayer;
+    pub const objectTransformLayer = LLVMOrcLLJITGetObjTranformLayer;
+
+    extern fn LLVMOrcLLJITGetIRTranformLayer(lljit: *LLJIT) *IRTransformLayer;
+    pub const irTransformLayer = LLVMOrcLLJITGetIRTranformLayer;
+
+    extern fn LLVMOrcLLJITGetDataLayoutStr(lljit: *LLJIT) [*:0]const u8;
+    pub const dataLayoutStr = LLVMOrcLLJITGetDataLayoutStr;
+};

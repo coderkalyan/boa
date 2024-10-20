@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core.zig");
+pub const Orc = @import("Orc.zig");
 
 pub const DiagnosticHandler = core.DiagnosticHandler;
 pub const YieldCallback = core.YieldCallback;
