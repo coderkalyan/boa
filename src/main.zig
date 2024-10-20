@@ -1,24 +1,27 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const Lexer = @import("lex.zig").Lexer;
-const Ast = @import("Ast.zig");
-const parse = @import("parse.zig");
-const IrGen = @import("ir/IrGen.zig");
-const Assembler = @import("bc/Assembler.zig");
-const InternPool = @import("InternPool.zig");
-const render = @import("render.zig");
-const Bytecode = @import("bc/Bytecode.zig");
-const Object = @import("rt/object.zig").Object;
-const Shape = @import("rt/Shape.zig");
-const PageBumpAllocator = @import("PageBumpAllocator.zig");
-const types = @import("rt/types.zig");
-const builtins = @import("rt/builtins.zig");
-const compile = @import("compile.zig");
+const core = @import("root.zig");
+const runtime = @import("rt/root.zig");
 
 const posix = std.posix;
-const Node = Ast.Node;
 const asBytes = std.mem.asBytes;
+const Allocator = std.mem.Allocator;
+const Lexer = core.Lexer;
+const Ast = core.Ast;
+const parse = core.parse;
+const InternPool = core.InternPool;
+const IrGen = core.IrGen;
+const Bytecode = core.Bytecode;
+const Assembler = core.Assembler;
+const PageBumpAllocator = core.PageBumpAllocator;
+const compile = core.compile;
+const CompilationInfo = core.CompilationInfo;
+const types = runtime.types;
+const builtins = runtime.builtins;
+const Object = runtime.Object;
+const Shape = runtime.Shape;
+const Node = Ast.Node;
 const Opcode = Bytecode.Opcode;
+
 const max_file_size = std.math.maxInt(u32);
 const value_stack_size = 8 * 1024 * 1024;
 const call_stack_size = 1 * 1024 * 1024;
@@ -131,7 +134,7 @@ pub fn interpret(
     );
 
     const function = pool.functionPtr(pool.get(fi_ip).function);
-    const comp = try pba.create(compile.CompilationInfo);
+    const comp = try pba.create(CompilationInfo);
     comp.* = .{
         .tree = function.tree,
         .ir = pool.irPtr(function.ir),
@@ -181,7 +184,7 @@ pub fn interpret(
 }
 
 comptime {
-    @export(compile.compile, .{ .name = "rt_compile", .linkage = .strong });
+    @export(compile, .{ .name = "rt_compile", .linkage = .strong });
     @export(builtins.dispatch, .{ .name = "rt_dispatch", .linkage = .strong });
     @export(builtins.attrIndex, .{ .name = "rt_attr_index", .linkage = .strong });
     @export(builtins.attrInsert, .{ .name = "rt_attr_insert", .linkage = .strong });

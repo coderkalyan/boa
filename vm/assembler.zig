@@ -4,7 +4,6 @@
 const std = @import("std");
 const mvll = @import("mvll/root.zig");
 const Bytecode = @import("Bytecode.zig");
-const vm_test = @import("test.zig");
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
     @cInclude("llvm-c/Target.h");
@@ -23,7 +22,6 @@ const Type = mvll.Type;
 const Value = mvll.Value;
 const Target = mvll.Target;
 const TargetMachine = mvll.TargetMachine;
-const ObjectStub = vm_test.ObjectStub;
 
 pub const Assembler = struct {
     ctx: *Context,
@@ -152,6 +150,32 @@ pub const Assembler = struct {
                 ctx.int(32),
                 ctx.int(32),
                 ctx.int(32),
+            };
+
+            return ctx.@"struct"(fields, false);
+        }
+
+        pub fn fieldPtr(as: *Assembler, base: *Value, comptime field: Field) *Value {
+            const zero = as.builder.iconst(as.ctx.int(32), 0, false);
+            const field_index = as.builder.iconst(as.ctx.int(32), @intFromEnum(field), false);
+            return as.builder.gep(.inbounds, structType(as), base, &.{ zero, field_index }, @tagName(field) ++ ".ptr");
+        }
+    };
+
+    const ObjectLayout = struct {
+        shape: *anyopaque,
+        overflow: [*]i64,
+
+        const Field = enum(u32) {
+            shape = 0,
+            overflow = 1,
+        };
+
+        pub fn structType(as: *Assembler) *Type {
+            const ctx = as.ctx;
+            const fields: []const *Type = &.{
+                ctx.ptr(address_space),
+                ctx.ptr(address_space),
             };
 
             return ctx.@"struct"(fields, false);
@@ -691,8 +715,10 @@ pub const Assembler = struct {
         // from the object and store it in the register
         const attr_index = self.read(self.offset(4), .none, "ic.val");
         const attr_offset = self.builder.cast(.zext, attr_index, self.ctx.int(64), "attr.offset");
-        const attrLoad = .{ .id = .attr_load, .args = .{ .ptr, .int }, .ret = .int };
-        const val = self.callBuiltin(attrLoad, &.{ object, attr_offset });
+        const overflow_ptr = ObjectLayout.fieldPtr(self, object, .overflow);
+        const overflow = self.builder.load(self.ctx.ptr(address_space), overflow_ptr, "overflow");
+        const val_ptr = self.builder.gep(.inbounds, self.ctx.int(64), overflow, &.{attr_offset}, "val.ptr");
+        const val = self.builder.load(self.ctx.int(64), val_ptr, "val");
         self.store(self.read(self.offset(1), .sext, "dst.reg"), val, .integer, "attr.val");
         // HandlerGenerator will add a tail call here
     }

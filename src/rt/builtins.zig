@@ -23,6 +23,7 @@ inline fn arg(sp: [*]i64, index: usize) i64 {
     return (sp - 1 - index)[0];
 }
 
+// TODO: replace with libffi
 export fn dispatch(in_id: u32, ret: *i64, sp: [*]i64, ctx: *Context) callconv(.C) void {
     const id: Id = @enumFromInt(in_id);
     switch (id) {
@@ -70,16 +71,20 @@ pub fn attrIndex(object: *Object, in_attr: u64) callconv(.C) i64 {
 pub fn attrInsert(ctx: *Context, object: *Object, in_attr: u64) callconv(.C) i64 {
     const attr: InternPool.Index = @enumFromInt(@as(u32, @truncate(in_attr)));
     object.shape = object.shape.transition(ctx.pba, attr) catch unreachable;
-    _ = object.attributes.addOne(ctx.pba) catch unreachable;
+    const count = object.shape.count;
+    const new_overflow = ctx.pba.alloc(i64, count) catch unreachable;
+    @memcpy(new_overflow[0 .. count - 1], object.overflow[0 .. count - 1]);
+    ctx.pba.free(object.overflow[0 .. count - 1]);
+    object.overflow = new_overflow.ptr;
     return @intCast(object.shape.get(attr).?);
 }
 
 pub fn attrLoad(object: *Object, index: u64) callconv(.C) i64 {
-    return object.attributes.items[index];
+    return object.overflow[index];
 }
 
 pub fn attrStore(object: *Object, index: u64, val: i64) callconv(.C) void {
-    object.attributes.items[index] = val;
+    object.overflow[index] = val;
 }
 
 pub fn print1Int(int: i64) void {

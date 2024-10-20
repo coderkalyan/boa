@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Object = struct {
     shape: *Shape,
-    attributes: std.ArrayListUnmanaged(Attribute),
+    overflow: [*]Attribute,
     // TODO: add in-object attributes for speeeed
 
     const Attribute = i64;
@@ -14,7 +14,7 @@ pub const Object = struct {
         const object = try gpa.create(Object);
         object.* = .{
             .shape = shape,
-            .attributes = .{},
+            .overflow = undefined,
         };
 
         return object;
