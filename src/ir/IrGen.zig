@@ -223,6 +223,13 @@ fn blockLocals(
                 const id = try ig.pool.put(.{ .str = ident_str });
                 try locals.put(ig.arena, id, {});
             },
+            .assign_binary => {
+                const assign = ig.tree.data(stmt).assign_binary;
+                const ident_token = ig.tree.mainToken(assign.ptr);
+                const ident_str = ig.tree.tokenString(ident_token);
+                const id = try ig.pool.put(.{ .str = ident_str });
+                try locals.put(ig.arena, id, {});
+            },
             else => {},
         }
     }
