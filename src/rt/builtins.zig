@@ -92,7 +92,7 @@ pub fn print1Int(int: i64) void {
 }
 
 pub fn print1Float(float: f64) void {
-    std.debug.print("{}\n", .{float});
+    std.debug.print("{d}\n", .{float});
 }
 
 pub fn print1Bool(b: u64) void {

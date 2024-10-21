@@ -232,6 +232,7 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !void {
     const tag = ig.tree.data(node);
     _ = switch (tag) {
         .assign_simple => try ig.assignSimple(scope, node),
+        .assign_binary => try ig.assignBinary(scope, node),
         .if_simple => try ig.ifSimple(scope, node),
         .if_else => try ig.ifElse(scope, node),
         .while_loop => try ig.whileLoop(scope, node),
@@ -256,14 +257,42 @@ fn assignSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     // module or function scope
     const context = scope.context();
     switch (context.tag) {
-        // global variables are implemented using a runtime hashtable lookup
-        // (which will eventually be wrapped by an inline cache)
+        // global variables are implemented by storing to the global "object",
+        // which at runtime uses a hashtable wrapped by an inline cache
         .module => return ig.current_builder.stGlobal(val, id),
         // local variables are zero cost, we just map the identifier
         // to the expression value
         .function => {
             const b = scope.cast(Scope.Block).?;
             try b.vars.put(ig.arena, id, val);
+            return val;
+        },
+        .block => unreachable,
+    }
+}
+
+fn assignBinary(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const assign = ig.tree.data(node).assign_binary;
+    const ident_token = ig.tree.mainToken(assign.ptr);
+    const ident_str = ig.tree.tokenString(ident_token);
+    const id = try ig.pool.put(.{ .str = ident_str });
+
+    const op_token: Ast.TokenIndex = @enumFromInt(@intFromEnum(ident_token) + 1);
+    const base = try ig.valExpr(scope, assign.ptr);
+    const val = try ig.valExpr(scope, assign.val);
+    const bin = try ig.binaryInner(op_token, base, val);
+    // how we treat the assignment depends on the context we're in -
+    // module or function scope
+    const context = scope.context();
+    switch (context.tag) {
+        // global variables are implemented by storing to the global "object",
+        // which at runtime uses a hashtable wrapped by an inline cache
+        .module => return ig.current_builder.stGlobal(bin, id),
+        // local variables are zero cost, we just map the identifier
+        // to the expression value
+        .function => {
+            const b = scope.cast(Scope.Block).?;
+            try b.vars.put(ig.arena, id, bin);
             return val;
         },
         .block => unreachable,
@@ -793,23 +822,32 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
 
 fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const op_token = ig.tree.mainToken(node);
-    const binary = ig.tree.data(node).binary;
     const token_tag = ig.tree.tokenTag(op_token);
-
     // special evaluation order (short circuiting)
     if (token_tag == .k_or) return ig.logicalOr(scope, node);
     if (token_tag == .k_and) return ig.logicalAnd(scope, node);
 
-    var l = try ig.valExpr(scope, binary.left);
-    var r = try ig.valExpr(scope, binary.right);
-    const lty = ig.typeOf(l);
+    const binary = ig.tree.data(node).binary;
+    const l = try ig.valExpr(scope, binary.left);
+    const r = try ig.valExpr(scope, binary.right);
+    return ig.binaryInner(op_token, l, r);
+}
+
+fn binaryInner(ig: *IrGen, op: Ast.TokenIndex, left: Ir.Index, right: Ir.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
+    const token_tag = ig.tree.tokenTag(op);
+    var l = left;
+    var r = right;
+    var lty = ig.typeOf(l);
     const rty = ig.typeOf(r);
 
     // special type handling - coerce one of the types to a float, the other
     // will follow suit below
-    if (token_tag == .slash) {
+    if (token_tag == .slash or token_tag == .slash_equal) {
         switch (lty) {
-            .int => l = try ig.current_builder.unary(.itof, l),
+            .int => {
+                l = try ig.current_builder.unary(.itof, l);
+                lty = .float;
+            },
             .bool => {
                 l = try ig.current_builder.unary(.btoi, l);
                 l = try ig.current_builder.unary(.itof, l);
@@ -883,23 +921,23 @@ fn binaryExpr(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, U
     }
 
     const tag: Ir.Inst.Tag = switch (token_tag) {
-        .plus => .add,
-        .minus => .sub,
-        .asterisk => .mul,
-        .slash, .slash_slash => .div,
-        .percent => .mod,
-        .asterisk_asterisk => .pow,
+        .plus, .plus_equal => .add,
+        .minus, .minus_equal => .sub,
+        .asterisk, .asterisk_equal => .mul,
+        .slash, .slash_slash, .slash_equal, .slash_slash_equal => .div,
+        .percent, .percent_equal => .mod,
+        .asterisk_asterisk, .asterisk_asterisk_equal => .pow,
         .equal_equal => .eq,
         .bang_equal => .ne,
         .l_angle => .lt,
         .r_angle => .gt,
         .l_angle_equal => .le,
         .r_angle_equal => .ge,
-        .ampersand => .band,
-        .pipe => .bor,
-        .caret => .bxor,
-        .l_angle_l_angle => .sll,
-        .r_angle_r_angle => .sra,
+        .ampersand, .ampersand_equal => .band,
+        .pipe, .pipe_equal => .bor,
+        .caret, .caret_equal => .bxor,
+        .l_angle_l_angle, .l_angle_l_angle_equal => .sll,
+        .r_angle_r_angle, .r_angle_r_angle_equal => .sra,
         else => unreachable,
     };
 
