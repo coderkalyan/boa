@@ -75,13 +75,13 @@ pub fn main() !void {
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);
 
-    // {
-    //     const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-    //     // _ = ir_renderer;
-    //     var renderer = ir_renderer.init(writer, arena.allocator(), ir);
-    //     try renderer.render();
-    //     try buffered_out.flush();
-    // }
+    {
+        const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+        // _ = ir_renderer;
+        var renderer = ir_renderer.init(writer, arena.allocator(), ir);
+        try renderer.render();
+        try buffered_out.flush();
+    }
 
     try writer.print("\n", .{});
 

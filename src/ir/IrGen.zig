@@ -1,5 +1,6 @@
 const std = @import("std");
 const InternPool = @import("../InternPool.zig");
+const Type = @import("../type.zig").Type;
 const Ast = @import("../Ast.zig");
 const Ir = @import("Ir.zig");
 const Scope = @import("Scope.zig");
@@ -280,7 +281,7 @@ fn assignSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
             // global variables are implemented by storing to the global "object",
             // which at runtime uses a hashtable wrapped by an inline cache
             .module => {
-                const module = scope.cast(Scope.Module).?;
+                const module = context.cast(Scope.Module).?;
                 try ig.contextInsert(&module.context, id, val);
                 const object = ig.pool.get(module.context).ty;
                 const slot = object.objectSlot(id).?;
@@ -378,39 +379,92 @@ fn ifSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 }
 
 fn ifElse(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
-    const b = scope.cast(Scope.Block).?;
-    const if_else = ig.tree.data(node).if_else;
-    const exec = ig.tree.extraData(Node.IfElse, if_else.exec);
+    switch (scope.tag) {
+        .module => {
+            const module = scope.cast(Scope.Module).?;
+            const if_else = ig.tree.data(node).if_else;
+            const exec = ig.tree.extraData(Node.IfElse, if_else.exec);
 
-    // we need at least three other blocks - for if, else, and exit
-    const if_builder = try ig.createBlock();
-    const else_builder = try ig.createBlock();
-    const exit_builder = try ig.createBlock();
+            // we need at least three other blocks - for if, else, and exit
+            const if_builder = try ig.createBlock();
+            const else_builder = try ig.createBlock();
+            const exit_builder = try ig.createBlock();
 
-    // the condition can be evaluated in the entry block (current)
-    const cond = try ig.valExpr(scope, if_else.condition);
-    const br = try ig.current_builder.br(cond, if_builder.index, else_builder.index);
-    const entry_block = try ig.current_builder.seal();
+            // the condition can be evaluated in the entry block (current)
+            const cond = try ig.valExpr(scope, if_else.condition);
+            const br = try ig.current_builder.br(cond, if_builder.index, else_builder.index);
+            const entry_block = try ig.current_builder.seal();
+            const entry_context = module.context;
 
-    ig.current_builder = if_builder;
-    var inner_if = Scope.Block.init(ig, scope);
-    try ig.blockInner(&inner_if.base, exec.exec_true);
-    if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
-        _ = try ig.current_builder.jmp(exit_builder.index);
+            module.context = entry_context;
+            ig.current_builder = if_builder;
+            var inner_if = Scope.Block.init(ig, scope);
+            try ig.blockInner(&inner_if.base, exec.exec_true);
+            if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+                _ = try ig.current_builder.jmp(exit_builder.index);
+            }
+            const exec_if = try ig.current_builder.seal();
+            const if_context = module.context;
+
+            module.context = entry_context;
+            ig.current_builder = else_builder;
+            var inner_else = Scope.Block.init(ig, scope);
+            try ig.blockInner(&inner_else.base, exec.exec_false);
+            if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+                _ = try ig.current_builder.jmp(exit_builder.index);
+            }
+            const exec_else = try ig.current_builder.seal();
+            const else_context = module.context;
+
+            _ = entry_block;
+            _ = exec_if;
+            _ = exec_else;
+
+            ig.current_builder = exit_builder;
+            const pool = ig.pool;
+            const if_object = pool.get(if_context).ty;
+            const else_object = pool.get(else_context).ty;
+            const merged = try Type.unionTypes(ig.arena, pool, if_object, else_object);
+            module.context = try pool.put(.{ .ty = merged });
+            return br;
+        },
+        .block => {
+            const b = scope.cast(Scope.Block).?;
+            const if_else = ig.tree.data(node).if_else;
+            const exec = ig.tree.extraData(Node.IfElse, if_else.exec);
+
+            // we need at least three other blocks - for if, else, and exit
+            const if_builder = try ig.createBlock();
+            const else_builder = try ig.createBlock();
+            const exit_builder = try ig.createBlock();
+
+            // the condition can be evaluated in the entry block (current)
+            const cond = try ig.valExpr(scope, if_else.condition);
+            const br = try ig.current_builder.br(cond, if_builder.index, else_builder.index);
+            const entry_block = try ig.current_builder.seal();
+
+            ig.current_builder = if_builder;
+            var inner_if = Scope.Block.init(ig, scope);
+            try ig.blockInner(&inner_if.base, exec.exec_true);
+            if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+                _ = try ig.current_builder.jmp(exit_builder.index);
+            }
+            const exec_if = try ig.current_builder.seal();
+
+            ig.current_builder = else_builder;
+            var inner_else = Scope.Block.init(ig, scope);
+            try ig.blockInner(&inner_else.base, exec.exec_false);
+            if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
+                _ = try ig.current_builder.jmp(exit_builder.index);
+            }
+            const exec_else = try ig.current_builder.seal();
+
+            ig.current_builder = exit_builder;
+            try b.hoistMergeDouble(&inner_if, exec_if, &inner_else, exec_else, entry_block);
+            return br;
+        },
+        else => unreachable,
     }
-    const exec_if = try ig.current_builder.seal();
-
-    ig.current_builder = else_builder;
-    var inner_else = Scope.Block.init(ig, scope);
-    try ig.blockInner(&inner_else.base, exec.exec_false);
-    if (ig.getTempIr().instTag(ig.current_builder.last()) != .ret) {
-        _ = try ig.current_builder.jmp(exit_builder.index);
-    }
-    const exec_else = try ig.current_builder.seal();
-
-    ig.current_builder = exit_builder;
-    try b.hoistMergeDouble(&inner_if, exec_if, &inner_else, exec_else, entry_block);
-    return br;
 }
 
 fn whileLoop(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
