@@ -135,7 +135,6 @@ pub fn generate(
         },
         .function => {
             // TODO: functions won't be able to see global scope
-            std.debug.print("{}\n", .{pool.get(global)});
             var module: Scope.Module = .{ .context = global };
             var fs = Scope.Function.init(&module.base);
             try ig.functionInner(&fs.base, node);
@@ -1143,7 +1142,6 @@ fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
         .bytecode = undefined,
         .state = .lazy,
     });
-    std.debug.print("storing: {}\n", .{module.context});
     const ip = try ig.pool.put(.{ .function = findex });
 
     const val = try ig.current_builder.constant(ip);

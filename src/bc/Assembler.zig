@@ -426,7 +426,6 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
                 .global = function.global,
                 .state = state,
             };
-            std.debug.print("comp: {}\n", .{comp.global});
             const function_info = try self.gpa.create(FunctionInfo);
             function_info.* = .{
                 .comp = @ptrCast(@alignCast(comp)),
