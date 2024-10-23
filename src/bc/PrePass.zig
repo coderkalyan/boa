@@ -84,14 +84,27 @@ const Context = struct {
 
         switch (tag) {
             .constant,
-            .ld_global,
             .arg,
+            .context_ptr,
             => if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst),
-            .st_global => {
+            .builtin => {}, // nothing to do here
+            .attribute_ptr, .load => {
                 if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.unary_ip.op, inst);
                 if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst);
             },
-            .builtin => {}, // nothing to do here
+            .list_init => {
+                if (dead_bits & 0x8 != 0) self.markRangeEnd(inst, inst);
+
+                const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+                const elements = ir.extraSlice(slice);
+
+                const special = ir.liveness.special.get(inst).?;
+                const dead_slice = ir.liveness.extraData(Liveness.ExtraSlice, special);
+                const dead_elements = ir.liveness.extraSlice(dead_slice);
+                for (elements, dead_elements) |element, dead_element| {
+                    if (dead_element == 1) self.markRangeEnd(@enumFromInt(element), inst);
+                }
+            },
             .itof,
             .ftoi,
             .itob,
@@ -136,6 +149,8 @@ const Context = struct {
             .gt,
             .le,
             .ge,
+            .store,
+            .element_ptr,
             => {
                 if (dead_bits & 0x1 != 0) self.markRangeEnd(payload.binary.l, inst);
                 if (dead_bits & 0x2 != 0) self.markRangeEnd(payload.binary.r, inst);

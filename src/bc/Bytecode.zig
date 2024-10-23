@@ -14,6 +14,10 @@ pub const Opcode = enum(i32) {
     // float to int
     ftoi,
 
+    // loads from the current context at a specified slot (index)
+    ld_ctx,
+    // stores to the current context at a specified slot (index)
+    st_ctx,
     // load an attribute from the global context, using an intern pool
     // index (attribute name) as an opaque key
     //
@@ -26,6 +30,7 @@ pub const Opcode = enum(i32) {
     // store a value to the global context - similar construction to above
     stg_init,
     stg_fast,
+    // load an element from a list
 
     // move (copy) register
     mov,

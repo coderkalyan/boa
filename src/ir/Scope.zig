@@ -42,6 +42,8 @@ const Tag = enum {
 pub const Module = struct {
     const base_tag: Tag = .module;
     base: Scope = .{ .tag = base_tag },
+
+    context: InternPool.Index,
 };
 
 // functions actually generate a scope to store local variables
@@ -73,6 +75,7 @@ pub const Block = struct {
             .parent = s,
             .ig = ig,
             .vars = .{},
+            // .context = .object_empty,
         };
     }
 
@@ -228,7 +231,7 @@ test "local var" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var module: Scope.Module = .{};
+    var module: Scope.Module = .{ .context = .object_empty };
     var function = Scope.Function.init(&module.base);
 
     const apple = try pool.put(.{ .str = "apple" });

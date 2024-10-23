@@ -154,10 +154,12 @@ fn generateInst(self: *Assembler, inst: Ir.Index, current_block: Ir.BlockIndex, 
     const index = @intFromEnum(inst);
     switch (ir.insts.items(.tag)[index]) {
         .constant => try self.constant(inst),
-        .ld_global => try self.ldGlobal(inst),
-        .st_global => try self.stGlobal(inst),
         .arg => try self.argInst(inst),
         .builtin => {}, // nothing here, used by call
+        .context_ptr, .element_ptr, .attribute_ptr => {}, // nothing here, used by load
+        .load => try self.load(inst),
+        .store => try self.store(inst),
+        .list_init => try self.listInit(inst),
         .itof,
         .ftoi,
         .itob,
@@ -285,14 +287,24 @@ fn elideInst(self: *Assembler, inst: Ir.Index) bool {
     // changing control flow) cannot be elided
     // otherwise, instructions that die immediately (never use) are elided
     const unused = switch (self.ir.instTag(inst)) {
-        .br, .jmp, .ret, .call, .st_global => false,
+        .br, .jmp, .ret, .call, .store => false,
         else => self.rangeEnd(inst) == inst,
     };
     if (!unused) return false;
 
     switch (self.ir.instTag(inst)) {
-        .constant, .arg, .builtin => {},
-        .ld_global,
+        .constant, .arg, .builtin, .context_ptr, .attribute_ptr, .element_ptr => {},
+        .list_init => {
+            const payload = self.ir.instPayload(inst);
+            const slice = self.ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+            const src_elements: []const Ir.Index = @ptrCast(self.ir.extraSlice(slice));
+
+            for (src_elements) |src_element| {
+                const element = self.register_map.get(src_element).?;
+                if (self.rangeEnd(src_element) == inst) self.deallocate(element);
+            }
+        },
+        .load,
         .itof,
         .ftoi,
         .itob,
@@ -344,7 +356,7 @@ fn elideInst(self: *Assembler, inst: Ir.Index) bool {
         // }
         // },
         .phi => {},
-        .st_global, .call => unreachable,
+        .call, .store => unreachable,
         .ret, .jmp, .br => unreachable,
     }
 
@@ -384,7 +396,8 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
             .float => @bitCast(tv.val.float),
             .bool => unreachable,
             .str => unreachable, // implemented in .str TODO: change this?
-            .@"union", .any => unreachable, // TODO: unimplemented
+            .list => unreachable, // TODO: implement this
+            .@"union", .any, .object => unreachable, // TODO: unimplemented
         },
         // load a string literal from the intern pool and construct a string
         // on the heap
@@ -410,8 +423,10 @@ fn addLdi(self: *Assembler, dst: Register, ip: InternPool.Index) !void {
                 .ir = ir,
                 .bytecode = bytecode,
                 .node = function.node,
+                .global = function.global,
                 .state = state,
             };
+            std.debug.print("comp: {}\n", .{comp.global});
             const function_info = try self.gpa.create(FunctionInfo);
             function_info.* = .{
                 .comp = @ptrCast(@alignCast(comp)),
@@ -448,6 +463,22 @@ fn addStg(self: *Assembler, src: Register, ip: InternPool.Index) !void {
         @bitCast(@intFromEnum(ip)),
         undefined, // inline cache key (lower 32 bits of shape pointer)
         undefined, // inline cache value (attribute index)
+    });
+}
+
+fn addLdCtx(self: *Assembler, dst: Register, slot: u32) !void {
+    try self.code.appendSlice(self.gpa, &.{
+        @intFromEnum(Opcode.ld_ctx),
+        dst,
+        @bitCast(slot),
+    });
+}
+
+fn addStCtx(self: *Assembler, src: Register, slot: u32) !void {
+    try self.code.appendSlice(self.gpa, &.{
+        @intFromEnum(Opcode.st_ctx),
+        src,
+        @bitCast(slot),
     });
 }
 
@@ -665,6 +696,56 @@ fn argInst(self: *Assembler, inst: Ir.Index) !void {
     try self.register_map.put(self.arena, inst, -5 - pos);
 }
 
+fn load(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
+    const payload = ir.instPayload(inst).unary_ip;
+    switch (ir.instTag(payload.op)) {
+        .context_ptr => {
+            const slot = ir.instPayload(payload.op).slot;
+            const dst = try self.allocate();
+            try self.register_map.put(self.arena, inst, dst);
+            try self.addLdCtx(dst, slot);
+        },
+        else => unreachable,
+    }
+}
+
+fn store(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
+    const binary = ir.instPayload(inst).binary;
+    switch (ir.instTag(binary.l)) {
+        .context_ptr => {
+            const slot = ir.instPayload(binary.l).slot;
+            const val = self.register_map.get(binary.r).?;
+            if (self.rangeEnd(binary.r) == inst) self.deallocate(val);
+            try self.addStCtx(val, slot);
+        },
+        else => unreachable,
+    }
+}
+
+fn listInit(self: *Assembler, inst: Ir.Index) !void {
+    const ir = self.ir;
+    const payload = ir.instPayload(inst);
+    const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+    const src_elements: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+
+    const scratch_top = self.scratch.items.len;
+    try self.scratch.ensureUnusedCapacity(self.arena, src_elements.len);
+    defer self.scratch.shrinkRetainingCapacity(scratch_top);
+    for (src_elements) |src_element| {
+        const element = self.register_map.get(src_element).?;
+        if (self.rangeEnd(src_element) == inst) self.deallocate(element);
+        self.scratch.appendAssumeCapacity(@bitCast(element));
+    }
+
+    const elements: []const i32 = @ptrCast(self.scratch.items[scratch_top..]);
+    _ = elements;
+    const dst = try self.allocate();
+    try self.register_map.put(self.arena, inst, dst);
+    try self.callRuntimeArgs(.list_init, dst, &.{});
+}
+
 fn call(self: *Assembler, inst: Ir.Index) !void {
     const ir = self.ir;
     const payload = ir.instPayload(inst).unary_extra;
@@ -684,6 +765,7 @@ fn call(self: *Assembler, inst: Ir.Index) !void {
 
     const scratch_top = self.scratch.items.len;
     try self.scratch.ensureUnusedCapacity(self.arena, src_args.len);
+    defer self.scratch.shrinkRetainingCapacity(scratch_top);
     var i = src_args.len;
     while (i > 0) {
         i -= 1;

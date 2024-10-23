@@ -15,6 +15,7 @@ pub const CompilationInfo = struct {
     tree: *const Ast,
     ir: *const Ir,
     node: Ast.Node.Index,
+    global: InternPool.Index,
     bytecode: *const Bytecode,
     state: State,
 
@@ -31,7 +32,7 @@ pub fn compile(ctx: *Context, fi: *FunctionInfo) callconv(.C) void {
     if (comp.state != .lazy) return;
 
     const ipool: *InternPool = @ptrCast(@alignCast(ctx.ipool));
-    const ir_data = IrGen.generate(.function, ctx.gpa, ipool, comp.tree, comp.node) catch unreachable;
+    const ir_data = IrGen.generate(.function, ctx.gpa, ipool, comp.tree, comp.node, comp.global) catch unreachable;
     const ir_index = ipool.createIr(ir_data) catch unreachable;
     comp.ir = ipool.irPtr(ir_index);
 

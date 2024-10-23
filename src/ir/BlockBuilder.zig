@@ -76,6 +76,17 @@ pub fn builtin(bb: *BlockBuilder, ip: InternPool.Index) !Index {
     return bb.add(.{ .tag = .builtin, .payload = .{ .ip = ip } });
 }
 
+pub fn listInit(bb: *BlockBuilder, args: []const Index) !Index {
+    const slice = try bb.ig.addSlice(@ptrCast(args));
+    const extra = try bb.ig.addExtra(slice);
+    return bb.add(.{
+        .tag = .list_init,
+        .payload = .{
+            .extra = extra,
+        },
+    });
+}
+
 pub fn unary(bb: *BlockBuilder, tag: Ir.Inst.Tag, operand: Index) !Index {
     return bb.add(.{ .tag = tag, .payload = .{ .unary = operand } });
 }
@@ -127,17 +138,37 @@ pub fn phi(
     return bb.add(.{ .tag = .phi, .payload = .{ .extra = extra_ptr } });
 }
 
-pub fn ldGlobal(bb: *BlockBuilder, ident: InternPool.Index) !Index {
-    return bb.add(.{ .tag = .ld_global, .payload = .{ .ip = ident } });
+pub fn contextPtr(bb: *BlockBuilder, slot: u32) !Index {
+    return bb.add(.{ .tag = .context_ptr, .payload = .{ .slot = slot } });
 }
 
-pub fn stGlobal(bb: *BlockBuilder, val: Index, ident: InternPool.Index) !Index {
+pub fn attributePtr(bb: *BlockBuilder, object: Index, ident: InternPool.Index) !Index {
+    return bb.add(.{ .tag = .attribute_ptr, .payload = .{ .unary_ip = .{ .op = object, .ip = ident } } });
+}
+
+pub fn elementPtr(bb: *BlockBuilder, operand: Index, index: Index) !Index {
     return bb.add(.{
-        .tag = .st_global,
+        .tag = .element_ptr,
         .payload = .{
-            .unary_ip = .{
-                .op = val,
-                .ip = ident,
+            .binary = .{
+                .l = operand,
+                .r = index,
+            },
+        },
+    });
+}
+
+pub fn load(bb: *BlockBuilder, ptr: Index, ty: InternPool.Index) !Index {
+    return bb.add(.{ .tag = .load, .payload = .{ .unary_ip = .{ .op = ptr, .ip = ty } } });
+}
+
+pub fn store(bb: *BlockBuilder, ptr: Index, val: Index) !Index {
+    return bb.add(.{
+        .tag = .store,
+        .payload = .{
+            .binary = .{
+                .l = ptr,
+                .r = val,
             },
         },
     });

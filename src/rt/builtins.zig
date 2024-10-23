@@ -6,6 +6,7 @@ const String = @import("string.zig").String;
 const Context = types.Context;
 const FunctionInfo = types.FunctionInfo;
 const InternPool = types.InternPool;
+const List = types.List;
 
 pub const Id = enum(i32) {
     print1_int,
@@ -17,6 +18,7 @@ pub const Id = enum(i32) {
     strcat,
     strrep,
     strlen,
+    list_init,
 };
 
 inline fn arg(sp: [*]i64, index: usize) i64 {
@@ -58,6 +60,11 @@ export fn dispatch(in_id: u32, ret: *i64, sp: [*]i64, ctx: *Context) callconv(.C
             // introspection in the vm
             const op: *const String = @ptrFromInt(@as(u64, @bitCast(arg(sp, 0))));
             ret.* = @intCast(op.len);
+        },
+        .list_init => {
+            const list = ctx.pba.create(List) catch unreachable;
+            list.* = List.init(ctx.pba) catch unreachable;
+            ret.* = @bitCast(@intFromPtr(list));
         },
     }
 }

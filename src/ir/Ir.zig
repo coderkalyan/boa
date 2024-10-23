@@ -30,17 +30,35 @@ pub const Inst = struct {
         // .ip
         constant,
 
-        // load the value of a global variable by identifier
-        // .ip
-        ld_global,
-        // store a value in a global variable by identifier
-        // .unary_ip
-        st_global,
         // extract an argument
         arg,
         // reference a builtin (must be called)
         // .ip
         builtin,
+        // initialize a list
+        list_init,
+        // calculate the pointer to a variable in the current "context" object
+        // by identifier
+        // .slot
+        context_ptr,
+        // calculate the pointer to an object field, by identifier
+        // .unary_ip
+        attribute_ptr,
+        // calculate the pointer to a list element, by index
+        // .unary
+        element_ptr,
+        // load the value from a ptr - exact semantics depends on operand type
+        // operand must be one of:
+        // * context_ptr
+        // * attribute_ptr
+        // * element_ptr
+        load,
+        // store a value to a ptr - exact semantics depends on the operand type
+        // operand must be one of:
+        // * context_ptr
+        // * attribute_ptr
+        // * element_ptr
+        store,
 
         // TODO: only encode destination type
         // int to float
@@ -122,6 +140,7 @@ pub const Inst = struct {
     pub const Payload = union {
         placeholder: void,
         ip: InternPool.Index,
+        slot: u32,
         unary: Index,
         binary: struct {
             l: Index,
@@ -153,6 +172,7 @@ pub const Inst = struct {
         const Tag = enum {
             placeholder,
             ip,
+            slot,
             unary,
             binary,
             unary_extra,
@@ -210,10 +230,15 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
             .tv => |tv| tv.ty,
             else => .str,
         },
-        .st_global => ir.typeOf(payload.unary_ip.op),
-        .ld_global => .any,
         .arg => payload.arg.ty,
         .builtin => unreachable, // TODO: implement this
+        .context_ptr, .attribute_ptr, .element_ptr => unreachable,
+        .load => payload.unary_ip.ip,
+        .store => unreachable,
+        .list_init => {
+            // TODO: implement non empty list initializers
+            return .list_int;
+        },
         .itof => .float,
         .ftoi => .int,
         .itob => .bool,
@@ -250,8 +275,10 @@ pub fn typeOf(ir: *const Ir, inst: Index) InternPool.Index {
 
 pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
     return switch (tag) {
-        .constant, .ld_global, .builtin => .ip,
-        .st_global => .unary_ip,
+        .constant, .builtin => .ip,
+        .context_ptr => .slot,
+        .attribute_ptr, .load => .unary_ip,
+        .list_init => .extra,
         .itof,
         .ftoi,
         .itob,
@@ -280,6 +307,8 @@ pub fn payloadTag(tag: Inst.Tag) Inst.Payload.Tag {
         .le,
         .ge,
         .phi,
+        .store,
+        .element_ptr,
         => .binary,
         .call => .unary_extra,
         .ret => .unary,
@@ -294,7 +323,20 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
     const payload = ir.insts.items(.payload)[index];
 
     switch (tag) {
-        .constant, .ld_global, .arg, .builtin => return &.{},
+        .constant,
+        .arg,
+        .builtin,
+        .context_ptr,
+        => return &.{},
+        .attribute_ptr, .load => {
+            ops[0] = payload.unary_ip.op;
+            return ops[0..1];
+        },
+        .list_init => {
+            const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+            const elements: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+            return elements;
+        },
         .itof,
         .ftoi,
         .itob,
@@ -306,10 +348,6 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
         .ret,
         => {
             ops[0] = payload.unary;
-            return ops[0..1];
-        },
-        .st_global => {
-            ops[0] = payload.unary_ip.op;
             return ops[0..1];
         },
         .add,
@@ -329,12 +367,15 @@ pub fn operands(ir: *const Ir, inst: Ir.Index, ops: *[2]Ir.Index) []const Index 
         .gt,
         .le,
         .ge,
+        .store,
+        .element_ptr,
         => {
             ops[0] = payload.binary.l;
             ops[1] = payload.binary.r;
             return ops[0..2];
         },
         .call => {
+            // TODO: this should probably include the callee ptr
             const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.unary_extra.extra);
             const args: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
             return args;

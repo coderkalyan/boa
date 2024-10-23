@@ -43,6 +43,8 @@ pub const Function = struct {
     tree: *const Ast,
     node: Ast.Node.Index,
     return_type: InternPool.Index,
+    // global context type as the function sees it
+    global: InternPool.Index,
     // invalid if state == .lazy
     ir: IrIndex,
     // invalid if state == .lazy
@@ -109,8 +111,8 @@ pub const Key = union(enum) {
         if (a_tag != b_tag) return false;
 
         switch (a_tag) {
-            inline .ty,
-            .tv,
+            .ty => return a.ty.eql(b.ty),
+            inline .tv,
             .function,
             .ir,
             .bytecode,
@@ -134,7 +136,9 @@ pub const Item = struct {
         float_ty,
         bool_ty,
         str_ty,
+        list_ty,
         union_ty,
+        object_ty,
         any_ty,
         none_tv,
         int_tv,
@@ -186,7 +190,10 @@ pub const Index = enum(u32) {
     float,
     bool,
     str,
+    list_int,
+    list_any,
     any,
+    object_empty,
 
     none,
     true,
@@ -200,6 +207,7 @@ pub const Index = enum(u32) {
     builtin_bool,
     builtin_print,
     builtin_len,
+    builtin_append,
 
     _,
 };
@@ -239,7 +247,10 @@ const static_keys = [_]Key{
     .{ .ty = Type.common.float },
     .{ .ty = Type.common.bool },
     .{ .ty = Type.common.str },
+    .{ .ty = Type.common.list_int },
+    .{ .ty = Type.common.list_any },
     .{ .ty = Type.common.any },
+    .{ .ty = Type.common.object_empty },
     .{ .tv = TypedValue.common.none },
     .{ .tv = TypedValue.common.true },
     .{ .tv = TypedValue.common.false },
@@ -251,6 +262,7 @@ const static_keys = [_]Key{
     .{ .str = "bool" },
     .{ .str = "print" },
     .{ .str = "len" },
+    .{ .str = "append" },
 };
 
 pub fn init(gpa: Allocator) !InternPool {
@@ -353,7 +365,9 @@ pub fn get(pool: *const InternPool, _index: Index) Key {
         .float_ty,
         .bool_ty,
         .str_ty,
+        .list_ty,
         .union_ty,
+        .object_ty,
         .any_ty,
         => .{ .ty = Type.deserialize(item, pool) },
         .none_tv,
@@ -447,19 +461,19 @@ fn testRoundtrip(pool: *InternPool, key: Key) !void {
 
     // index -> key -> index roundtrip
     var key_rt = pool.get(index);
-    try std.testing.expect(std.meta.eql(key, key_rt));
+    try std.testing.expect(key.eql(key_rt, pool));
     try std.testing.expectEqual(index, try pool.put(key_rt));
 
     // key -> index -> key roundtrip
     const index_rt = try pool.put(key);
     try std.testing.expectEqual(index, index_rt);
     key_rt = pool.get(index_rt);
-    try std.testing.expect(std.meta.eql(key, key_rt));
+    try std.testing.expect(key.eql(key_rt, pool));
 }
 
 fn testIndex(pool: *InternPool, key: Key, index: Index) !void {
     try std.testing.expectEqual(index, try pool.put(key));
-    try std.testing.expect(std.meta.eql(key, pool.get(index)));
+    try std.testing.expect(key.eql(pool.get(index), pool));
 }
 
 test "basic type intern" {
@@ -495,6 +509,50 @@ test "bool intern" {
     try testRoundtrip(&pool, .{ .tv = TypedValue.common.false });
     try testIndex(&pool, .{ .tv = .{ .ty = .bool, .val = .{ .bool = false } } }, .false);
     try testIndex(&pool, .{ .tv = TypedValue.common.false }, .false);
+}
+
+test "union type intern" {
+    var pool = try InternPool.init(std.testing.allocator);
+    defer pool.deinit();
+
+    try testRoundtrip(&pool, .{ .ty = .{ .@"union" = &.{.int} } });
+    try testRoundtrip(&pool, .{ .ty = .{ .@"union" = &.{.float} } });
+    try testRoundtrip(&pool, .{ .ty = .{ .@"union" = &.{.bool} } });
+    try testRoundtrip(&pool, .{ .ty = .{ .@"union" = &.{ .int, .float } } });
+    try testRoundtrip(&pool, .{ .ty = .{ .@"union" = &.{ .int, .float, .bool } } });
+}
+
+test "object type intern" {
+    var pool = try InternPool.init(std.testing.allocator);
+    defer pool.deinit();
+
+    const apple = try pool.put(.{ .str = "apple" });
+    const banana = try pool.put(.{ .str = "banana" });
+    const cherry = try pool.put(.{ .str = "cherry" });
+
+    const object_empty: Type = .{ .object = &.{} };
+    try testRoundtrip(&pool, .{ .ty = object_empty });
+    try testIndex(&pool, .{ .ty = object_empty }, .object_empty);
+
+    const int_float: Type = .{
+        .object = &.{
+            .{ .name = apple, .ty = .int },
+            .{ .name = banana, .ty = .float },
+        },
+    };
+    try testRoundtrip(&pool, .{ .ty = int_float });
+
+    const int_float_bool: Type = .{
+        .object = &.{
+            .{ .name = apple, .ty = .int },
+            .{ .name = banana, .ty = .float },
+            .{ .name = cherry, .ty = .bool },
+        },
+    };
+    try testRoundtrip(&pool, .{ .ty = int_float_bool });
+    const if_index = try pool.put(.{ .ty = int_float });
+    const ifb_index = try pool.put(.{ .ty = int_float_bool });
+    try std.testing.expect(if_index != ifb_index);
 }
 
 test "int intern" {

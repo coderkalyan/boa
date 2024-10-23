@@ -41,6 +41,8 @@ pub const Assembler = struct {
         .{ .opcode = .ldw, .words = 4, .generator = ldw, .next = .default },
         .{ .opcode = .itof, .words = 3, .generator = itof, .next = .default },
         .{ .opcode = .ftoi, .words = 3, .generator = ftoi, .next = .default },
+        .{ .opcode = .ld_ctx, .words = 3, .generator = ldCtx, .next = .default },
+        .{ .opcode = .st_ctx, .words = 3, .generator = stCtx, .next = .default },
         .{ .opcode = .ldg_init, .words = 5, .generator = ldgInit, .next = .none },
         .{ .opcode = .ldg_fast, .words = 5, .generator = ldgFast, .next = .default },
         .{ .opcode = .stg_init, .words = 5, .generator = stgInit, .next = .none },
@@ -632,6 +634,36 @@ pub const Assembler = struct {
         const src = self.load(self.read(self.offset(2), .sext, "src.reg"), .double, "src");
         const cast = self.builder.cast(.fptosi, src, self.ctx.int(64), "ftoi");
         self.store(self.read(self.offset(1), .sext, "dst.reg"), cast, .integer, "dst");
+    }
+
+    fn ldCtx(self: *Assembler) !void {
+        const ctx = self.param(.ctx);
+
+        // load the global object from the context
+        const global_ptr = ContextLayout.fieldPtr(self, ctx, .global);
+        const object = self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
+        // load from the global object at the specified slot index and store it in the register
+        const attr_index = self.read(self.offset(2), .none, "attr.index");
+        const overflow_ptr = ObjectLayout.fieldPtr(self, object, .overflow);
+        const overflow = self.builder.load(self.ctx.ptr(address_space), overflow_ptr, "overflow");
+        const val_ptr = self.builder.gep(.inbounds, self.ctx.int(64), overflow, &.{attr_index}, "val.ptr");
+        const val = self.builder.load(self.ctx.int(64), val_ptr, "val");
+        self.store(self.read(self.offset(1), .sext, "dst.reg"), val, .integer, "attr.val");
+    }
+
+    fn stCtx(self: *Assembler) !void {
+        const ctx = self.param(.ctx);
+
+        // load the global object from the context
+        const global_ptr = ContextLayout.fieldPtr(self, ctx, .global);
+        const object = self.builder.load(self.ctx.ptr(address_space), global_ptr, "global");
+        // load from a reigster and store into the global object at the specified slot index
+        const attr_index = self.read(self.offset(2), .none, "attr.index");
+        const overflow_ptr = ObjectLayout.fieldPtr(self, object, .overflow);
+        const overflow = self.builder.load(self.ctx.ptr(address_space), overflow_ptr, "overflow");
+        const slot_ptr = self.builder.gep(.inbounds, self.ctx.int(64), overflow, &.{attr_index}, "val.ptr");
+        const val = self.load(self.read(self.offset(1), .sext, "dst.reg"), .integer, "attr.val");
+        _ = self.builder.store(val, slot_ptr);
     }
 
     fn ldgInit(self: *Assembler) !void {

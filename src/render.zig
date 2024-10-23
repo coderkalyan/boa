@@ -325,6 +325,22 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                     try writer.print(")", .{});
                     try self.stream.newline();
                 },
+                .list_init => {
+                    const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+                    const elements = ir.extraSlice(slice);
+                    try writer.print("list_init(", .{});
+
+                    const special = ir.liveness.special.get(inst).?;
+                    const dead_slice = ir.liveness.extraData(Liveness.ExtraSlice, special);
+                    const dead_elements = ir.liveness.extraSlice(dead_slice);
+                    for (elements, dead_elements, 0..) |element, dead_element, i| {
+                        const dead = if (dead_element == 1) "!" else "";
+                        try writer.print("{s}%{}", .{ dead, element });
+                        if (i < elements.len - 1) try writer.print(", ", .{});
+                    }
+                    try writer.print(")", .{});
+                    try self.stream.newline();
+                },
                 inline else => {
                     try writer.print("{s}(", .{@tagName(tag)});
 
@@ -351,6 +367,9 @@ pub fn IrRenderer(comptime width: u32, comptime WriterType: anytype) type {
                         },
                         .arg => {
                             try writer.print("{}", .{payload.arg});
+                        },
+                        .slot => {
+                            try writer.print("{}", .{payload.slot});
                         },
                     }
                     try writer.print(")", .{});
@@ -422,6 +441,13 @@ pub fn BytecodeRenderer(comptime width: u32, comptime WriterType: anytype) type 
 
                     const imm = lower | (@as(u64, upper) << 32);
                     try writer.print("x{}, 0x{x:0>16}\n", .{ dst, imm });
+                },
+                .ld_ctx,
+                .st_ctx,
+                => {
+                    const src = self.readWord(&pc);
+                    const slot = self.readWord(&pc);
+                    try writer.print("x{}, {}\n", .{ src, @as(u32, @bitCast(slot)) });
                 },
                 .ldg_init,
                 .ldg_fast,

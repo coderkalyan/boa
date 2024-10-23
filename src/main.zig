@@ -17,6 +17,7 @@ const compile = core.compile;
 const CompilationInfo = core.CompilationInfo;
 const types = runtime.types;
 const builtins = runtime.builtins;
+const render = core.render;
 const Object = runtime.Object;
 const Shape = runtime.Shape;
 const Node = Ast.Node;
@@ -70,39 +71,40 @@ pub fn main() !void {
 
     // post order format guarantees that the module node will be the last
     const module_node: Node.Index = @enumFromInt(@as(u32, @intCast(tree.nodes.len - 1)));
-    const ir_data = try IrGen.generate(.module, gpa, &pool, &tree, module_node);
+    const ir_data = try IrGen.generate(.module, gpa, &pool, &tree, module_node, .object_empty);
     const ir_index = try pool.createIr(ir_data);
     const ir = pool.irPtr(ir_index);
 
-    // {
-    //     const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
-    //     // _ = ir_renderer;
-    //     var renderer = ir_renderer.init(writer, arena.allocator(), ir);
-    //     try renderer.render();
-    //     try buffered_out.flush();
-    // }
+    {
+        const ir_renderer = render.IrRenderer(2, @TypeOf(writer));
+        // _ = ir_renderer;
+        var renderer = ir_renderer.init(writer, arena.allocator(), ir);
+        try renderer.render();
+        try buffered_out.flush();
+    }
 
     try writer.print("\n", .{});
 
     const bc_data = try Assembler.assemble(gpa, &pool, ir);
     const bc_index = try pool.createBytecode(bc_data);
-    // const bc = pool.bytecodePtr(bc_index);
-    // {
-    //     const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
-    //     // _ = bytecode_renderer;
-    //     var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
-    //     renderer.render() catch |err| {
-    //         try buffered_out.flush();
-    //         return err;
-    //     };
-    //     try buffered_out.flush();
-    // }
+    const bc = pool.bytecodePtr(bc_index);
+    {
+        const bytecode_renderer = render.BytecodeRenderer(2, @TypeOf(writer));
+        // _ = bytecode_renderer;
+        var renderer = bytecode_renderer.init(writer, arena.allocator(), &pool, bc);
+        renderer.render() catch |err| {
+            try buffered_out.flush();
+            return err;
+        };
+        try buffered_out.flush();
+    }
 
     const findex = try pool.createFunction(.{
         .state = .interpreted,
         .tree = &tree,
         .node = module_node,
         .return_type = .nonetype,
+        .global = .object_empty,
         .ir = ir_index,
         .bytecode = bc_index,
     });
@@ -123,6 +125,8 @@ pub fn interpret(
     shape_ptr.* = try Shape.init(pba);
     const global = try Object.init(gpa, shape_ptr);
     defer gpa.destroy(global);
+    // TODO: this leaks
+    global.overflow = (try gpa.alloc(i64, 1)).ptr;
 
     const stack = try posix.mmap(
         null,
@@ -139,6 +143,7 @@ pub fn interpret(
         .tree = function.tree,
         .ir = pool.irPtr(function.ir),
         .bytecode = pool.bytecodePtr(function.bytecode),
+        .global = function.global,
         .node = function.node,
         .state = .interpreted,
     };

@@ -262,10 +262,12 @@ const Analysis = struct {
         const tag = ir.instTag(inst);
         switch (tag) {
             .constant => try analysis.constant(live_out, inst),
-            .ld_global => try analysis.ldGlobal(live_out, inst),
-            .st_global => try analysis.stGlobal(live_out, inst),
+            .list_init => try analysis.listInit(live_out, inst),
             .arg => try analysis.argInst(live_out, inst),
+            .context_ptr => try analysis.contextPtr(live_out, inst),
+            .attribute_ptr => try analysis.attributePtr(live_out, inst),
             .builtin => {}, // nothing to do here, doesn't generate insts (used by call)
+            .load => try analysis.load(live_out, inst),
             .itof,
             .ftoi,
             .itob,
@@ -292,6 +294,8 @@ const Analysis = struct {
             .gt,
             .le,
             .ge,
+            .store,
+            .element_ptr,
             => try analysis.binaryOp(live_out, inst),
             .call => try analysis.call(live_out, inst),
             .phi => try analysis.phi(live_out, inst),
@@ -305,6 +309,32 @@ const Analysis = struct {
         var bits: u4 = 0;
         if (!live_out.remove(inst)) bits |= 0x8;
         analysis.setBits(inst, bits);
+    }
+
+    fn listInit(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        const ir = analysis.ir;
+        const payload = ir.instPayload(inst);
+        const slice = ir.extraData(Ir.Inst.ExtraSlice, payload.extra);
+        const elements: []const Ir.Index = @ptrCast(ir.extraSlice(slice));
+
+        const scratch_top = analysis.scratch.items.len;
+        defer analysis.scratch.shrinkRetainingCapacity(scratch_top);
+        try analysis.scratch.ensureUnusedCapacity(analysis.arena, elements.len);
+        try live_out.ensureUnusedCapacity(analysis.arena, @intCast(elements.len));
+        for (elements) |element| {
+            if (!live_out.contains(element)) {
+                analysis.scratch.appendAssumeCapacity(@intFromBool(true));
+                live_out.putAssumeCapacity(element, {});
+            } else {
+                analysis.scratch.appendAssumeCapacity(@intFromBool(false));
+            }
+        }
+
+        var bits: u4 = 0;
+        if (!live_out.contains(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+        const extra = try analysis.addSlice(analysis.scratch.items[scratch_top..]);
+        try analysis.special.put(analysis.gpa, inst, extra);
     }
 
     fn ldGlobal(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
@@ -327,6 +357,34 @@ const Analysis = struct {
 
     fn argInst(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
         var bits: u4 = 0;
+        if (!live_out.remove(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+    }
+
+    fn contextPtr(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        var bits: u4 = 0;
+        if (!live_out.remove(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+    }
+
+    fn attributePtr(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        const payload = analysis.ir.instPayload(inst);
+        var bits: u4 = 0;
+        if (!live_out.contains(payload.unary_ip.op)) {
+            bits |= 0x1;
+            try live_out.put(analysis.arena, payload.unary_ip.op, {});
+        }
+        if (!live_out.remove(inst)) bits |= 0x8;
+        analysis.setBits(inst, bits);
+    }
+
+    fn load(analysis: *Analysis, live_out: *LiveSet, inst: Ir.Index) !void {
+        const payload = analysis.ir.instPayload(inst);
+        var bits: u4 = 0;
+        if (!live_out.contains(payload.unary_ip.op)) {
+            bits |= 0x1;
+            try live_out.put(analysis.arena, payload.unary_ip.op, {});
+        }
         if (!live_out.remove(inst)) bits |= 0x8;
         analysis.setBits(inst, bits);
     }

@@ -3,6 +3,7 @@ const lex = @import("lex.zig");
 pub const Ast = @import("Ast.zig");
 pub const parse = @import("parse.zig");
 pub const InternPool = @import("InternPool.zig");
+const Type = @import("type.zig").Type;
 const Scope = @import("ir/Scope.zig");
 pub const IrGen = @import("ir/IrGen.zig");
 pub const Bytecode = @import("bc/Bytecode.zig");

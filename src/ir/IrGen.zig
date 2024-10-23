@@ -108,6 +108,7 @@ pub fn generate(
     pool: *InternPool,
     tree: *const Ast,
     node: Node.Index,
+    global: InternPool.Index,
 ) !Ir {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -129,12 +130,13 @@ pub fn generate(
     ig.current_builder = try ig.createBlock();
     switch (ctx) {
         .module => {
-            var module: Scope.Module = .{};
+            var module: Scope.Module = .{ .context = .object_empty };
             try ig.moduleInner(&module.base, node);
         },
         .function => {
             // TODO: functions won't be able to see global scope
-            var module: Scope.Module = .{};
+            std.debug.print("{}\n", .{pool.get(global)});
+            var module: Scope.Module = .{ .context = global };
             var fs = Scope.Function.init(&module.base);
             try ig.functionInner(&fs.base, node);
         },
@@ -253,29 +255,49 @@ fn statement(ig: *IrGen, scope: *Scope, node: Node.Index) !void {
     };
 }
 
+fn contextInsert(ig: *IrGen, ctx: *InternPool.Index, id: InternPool.Index, val: Ir.Index) !void {
+    const ty = ig.getTempIr().typeOf(val);
+    var object = ig.pool.get(ctx.*).ty;
+    object = try object.objectInsert(
+        ig.arena,
+        .{ .name = id, .ty = ty },
+    );
+    ctx.* = try ig.pool.put(.{ .ty = object });
+}
+
 fn assignSimple(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     const assign = ig.tree.data(node).assign_simple;
     const ident_token = ig.tree.mainToken(assign.ptr);
     const ident_str = ig.tree.tokenString(ident_token);
     const id = try ig.pool.put(.{ .str = ident_str });
 
-    const val = try ig.valExpr(scope, assign.val);
-    // how we treat the assignment depends on the context we're in -
-    // module or function scope
-    const context = scope.context();
-    switch (context.tag) {
-        // global variables are implemented by storing to the global "object",
-        // which at runtime uses a hashtable wrapped by an inline cache
-        .module => return ig.current_builder.stGlobal(val, id),
-        // local variables are zero cost, we just map the identifier
-        // to the expression value
-        .function => {
-            const b = scope.cast(Scope.Block).?;
-            try b.vars.put(ig.arena, id, val);
-            return val;
-        },
-        .block => unreachable,
-    }
+    // TODO: clean this up
+    if (ig.tree.tag(assign.ptr) == .ident) {
+        const val = try ig.valExpr(scope, assign.val);
+        // how we treat the assignment depends on the context we're in -
+        // module or function scope
+        const context = scope.context();
+        switch (context.tag) {
+            // global variables are implemented by storing to the global "object",
+            // which at runtime uses a hashtable wrapped by an inline cache
+            .module => {
+                const module = scope.cast(Scope.Module).?;
+                try ig.contextInsert(&module.context, id, val);
+                const object = ig.pool.get(module.context).ty;
+                const slot = object.objectSlot(id).?;
+                const global_ptr = try ig.current_builder.contextPtr(slot);
+                return ig.current_builder.store(global_ptr, val);
+            },
+            // local variables are zero cost, we just map the identifier
+            // to the expression value
+            .function => {
+                const b = scope.cast(Scope.Block).?;
+                try b.vars.put(ig.arena, id, val);
+                return val;
+            },
+            .block => unreachable,
+        }
+    } else unreachable;
 }
 
 fn assignBinary(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
@@ -294,7 +316,14 @@ fn assignBinary(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     switch (context.tag) {
         // global variables are implemented by storing to the global "object",
         // which at runtime uses a hashtable wrapped by an inline cache
-        .module => return ig.current_builder.stGlobal(bin, id),
+        .module => {
+            const module = scope.cast(Scope.Module).?;
+            try ig.contextInsert(&module.context, id, val);
+            const object = ig.pool.get(module.context).ty;
+            const slot = object.objectSlot(id).?;
+            const global_ptr = try ig.current_builder.contextPtr(slot);
+            return ig.current_builder.store(global_ptr, val);
+        },
         // local variables are zero cost, we just map the identifier
         // to the expression value
         .function => {
@@ -626,7 +655,7 @@ const ResultInfo = struct {
     };
 };
 
-inline fn valExpr(ig: *IrGen, s: *Scope, node: Node.Index) !Ir.Index {
+inline fn valExpr(ig: *IrGen, s: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     const ri: ResultInfo = .{ .semantics = .val };
     return ig.expr(s, ri, node);
 }
@@ -652,7 +681,7 @@ inline fn typeExpr(ig: *IrGen, s: *Scope, node: Node.Index) !InternPool.Index {
     // return ig.expr(s, ri, node);
 }
 
-fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
+fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
     return switch (ri.semantics) {
         .val => switch (ig.tree.data(node)) {
             .none_literal => ig.noneLiteral(scope, node),
@@ -660,10 +689,13 @@ fn expr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
             .integer_literal => ig.integerLiteral(scope, node),
             .float_literal => ig.floatLiteral(scope, node),
             .string_literal => ig.stringLiteral(scope, node),
+            .list_literal => ig.listLiteral(scope, node),
             .ident => ig.identExpr(scope, ri, node),
             .unary => ig.unaryExpr(scope, node),
             .binary => ig.binaryExpr(scope, node),
             .call => ig.call(scope, node),
+            .subscript => ig.subscript(scope, ri, node),
+            .attribute => ig.attribute(scope, ri, node),
             else => ig.unexpectedNode(node),
         },
         .ptr => switch (ig.tree.data(node)) {
@@ -783,6 +815,23 @@ fn stringLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
     return ig.current_builder.constant(ip);
 }
 
+fn listLiteral(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const list_literal = ig.tree.data(node).list_literal;
+    const slice = ig.tree.extraData(Node.ExtraSlice, list_literal.elements);
+    const ast_elements: []const Node.Index = @ptrCast(ig.tree.extraSlice(slice));
+
+    const scratch_top = ig.scratch.items.len;
+    defer ig.scratch.shrinkRetainingCapacity(scratch_top);
+    try ig.scratch.ensureUnusedCapacity(ig.arena, ast_elements.len);
+    for (ast_elements) |ast_element| {
+        const element = try ig.valExpr(scope, ast_element);
+        ig.scratch.appendAssumeCapacity(@intFromEnum(element));
+    }
+
+    const args = ig.scratch.items[scratch_top..];
+    return ig.current_builder.listInit(@ptrCast(args));
+}
+
 fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
     _ = ri;
     const ident_token = ig.tree.mainToken(node);
@@ -805,7 +854,14 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
     switch (context.tag) {
         // global variables are implemented using a runtime hashtable lookup
         // (which will eventually be wrapped by an inline cache)
-        .module => return ig.current_builder.ldGlobal(id),
+        .module => {
+            const module = scope.cast(Scope.Module).?;
+            const object = ig.pool.get(module.context).ty;
+            const slot = object.objectSlot(id).?;
+            const ty = object.object[slot].ty;
+            const global_ptr = try ig.current_builder.contextPtr(slot);
+            return ig.current_builder.load(global_ptr, ty);
+        },
         // local variables are zero cost, we just map the identifier
         // to the expression value
         .function => {
@@ -816,12 +872,12 @@ fn identExpr(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.In
                 return ident_block.vars.get(id).?;
             }
 
-            return ig.current_builder.ldGlobal(id);
-            // const ident_scope = scope.resolveIdent(id) orelse {
-            //     std.debug.print("unknown identifier: {s}\n", .{ident_str});
-            //     unreachable;
-            // };
-
+            const module = context.parent().?.cast(Scope.Module).?;
+            const object = ig.pool.get(module.context).ty;
+            const slot = object.objectSlot(id).?;
+            const ty = object.object[slot].ty;
+            const global_ptr = try ig.current_builder.contextPtr(slot);
+            return ig.current_builder.load(global_ptr, ty);
         },
         .block => unreachable,
     }
@@ -1039,6 +1095,7 @@ fn returnVal(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Un
 }
 
 fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
+    const module = scope.cast(Scope.Module).?;
     const function_data = ig.tree.data(node).function;
     const signature = ig.tree.extraData(Node.FunctionSignature, function_data.signature);
 
@@ -1049,31 +1106,77 @@ fn function(ig: *IrGen, scope: *Scope, node: Node.Index) !Ir.Index {
 
     var return_type: InternPool.Index = .any;
     if (signature.ret != .null) return_type = try ig.typeExpr(scope, signature.ret);
-    const findex = try ig.pool.createFunction(.{
-        .tree = ig.tree,
-        .node = node,
-        .return_type = return_type,
-        .ir = undefined,
-        .bytecode = undefined,
-        .state = .lazy,
-    });
-    const ip = try ig.pool.put(.{ .function = findex });
 
-    const val = try ig.current_builder.constant(ip);
+    // "forward" declare the function in case its recursive
+    // TODO: this doesn't work for mutually recursive functions
     const context = scope.context();
     switch (context.tag) {
         // global variables are implemented using a runtime hashtable lookup
         // (which will eventually be wrapped by an inline cache)
-        .module => return ig.current_builder.stGlobal(val, id),
+        .module => {
+            // TODO: use contextPtr
+            // TODO: use full function type
+            var object = ig.pool.get(module.context).ty;
+            object = try object.objectInsert(
+                ig.arena,
+                .{ .name = id, .ty = return_type },
+            );
+            module.context = try ig.pool.put(.{ .ty = object });
+        },
         // local variables are zero cost, we just map the identifier
         // to the expression value
-        .function => {
-            const b = scope.cast(Scope.Block).?;
-            try b.vars.put(ig.arena, id, val);
-            return val;
-        },
+        // .function => {
+        //     const b = scope.cast(Scope.Block).?;
+        //     try b.vars.put(ig.arena, id, val);
+        //     return val;
+        // },
         .block => unreachable,
+        else => unreachable,
     }
+
+    const findex = try ig.pool.createFunction(.{
+        .tree = ig.tree,
+        .node = node,
+        .return_type = return_type,
+        .global = module.context,
+        .ir = undefined,
+        .bytecode = undefined,
+        .state = .lazy,
+    });
+    std.debug.print("storing: {}\n", .{module.context});
+    const ip = try ig.pool.put(.{ .function = findex });
+
+    const val = try ig.current_builder.constant(ip);
+    const object = ig.pool.get(module.context).ty;
+    const slot = object.objectSlot(id).?;
+    const global_ptr = try ig.current_builder.contextPtr(slot);
+    return ig.current_builder.store(global_ptr, val);
+}
+
+fn subscript(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
+    const access = ig.tree.data(node).subscript;
+    const operand = try ig.valExpr(scope, access.operand);
+    const index = try ig.valExpr(scope, access.index);
+    const element_ptr = try ig.current_builder.elementPtr(operand, index);
+    return switch (ri.semantics) {
+        .ptr => element_ptr,
+        .val => unreachable, //ig.current_builder.load(element_ptr),
+    };
+}
+
+fn attribute(ig: *IrGen, scope: *Scope, ri: ResultInfo, node: Node.Index) !Ir.Index {
+    const data = ig.tree.data(node).attribute;
+    const main_token = ig.tree.mainToken(node);
+    const ident_token: Ast.TokenIndex = @enumFromInt(@intFromEnum(main_token) + 1);
+    const ident_str = ig.tree.tokenString(ident_token);
+    const id = try ig.pool.put(.{ .str = ident_str });
+
+    const object = try ig.valExpr(scope, data);
+    const attribute_ptr = try ig.current_builder.attributePtr(object, id);
+    return switch (ri.semantics) {
+        .ptr => attribute_ptr,
+        .val => unreachable, // ig.current_builder.load(attribute_ptr),
+    };
 }
 
 fn call(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsupported }!Ir.Index {
@@ -1084,7 +1187,10 @@ fn call(ig: *IrGen, scope: *Scope, node: Node.Index) error{ OutOfMemory, Unsuppo
     const ptr = try ig.valExpr(scope, call_data.ptr);
     const scratch_top = ig.scratch.items.len;
     defer ig.scratch.shrinkRetainingCapacity(scratch_top);
-    try ig.scratch.ensureUnusedCapacity(ig.arena, ast_args.len);
+    try ig.scratch.ensureUnusedCapacity(ig.arena, ast_args.len + 1);
+    // if the call is on an attribute access, implicitly insert the attribute operand
+    // as an argument
+    // now push the visible arguments
     for (ast_args) |ast_arg| {
         const arg = try ig.valExpr(scope, ast_arg);
         ig.scratch.appendAssumeCapacity(@intFromEnum(arg));

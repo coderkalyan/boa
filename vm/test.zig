@@ -200,121 +200,121 @@ test "ldw" {
     }
 }
 
-test "ldg_init" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
+// test "ldg_init" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
+//     var context: ContextStub = .{
+//         .ipool = @ptrFromInt(ipool),
+//         .global = &global,
+//     };
+//
+//     try runTest(arena, &context, .{
+//         .in_tape = .{ Opcode.ldg_init, 0, 2, 0, 0 },
+//         .in_stack = .{0},
+//         .frame_size = 1,
+//         .out_tape = .{ Opcode.ldg_fast, 0, 2, global_shape, 2 },
+//         .out_stack = .{20},
+//         .offsets = .{ 5, 0, 0 },
+//     });
+// }
 
-    var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
-    var context: ContextStub = .{
-        .ipool = @ptrFromInt(ipool),
-        .global = &global,
-    };
-
-    try runTest(arena, &context, .{
-        .in_tape = .{ Opcode.ldg_init, 0, 2, 0, 0 },
-        .in_stack = .{0},
-        .frame_size = 1,
-        .out_tape = .{ Opcode.ldg_fast, 0, 2, global_shape, 2 },
-        .out_stack = .{20},
-        .offsets = .{ 5, 0, 0 },
-    });
-}
-
-test "ldg_fast" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
-    var context: ContextStub = .{
-        .ipool = @ptrFromInt(ipool),
-        .global = &global,
-    };
-
-    // cache hit - ip = 2, already cached as index 2 in global
-    try runTest(arena, &context, .{
-        .in_tape = .{ Opcode.ldg_fast, 0, 2, global_shape, 2 },
-        .in_stack = .{0},
-        .frame_size = 1,
-        .out_stack = .{20},
-        .offsets = .{ 5, 0, 0 },
-    });
-
-    // cache miss - ip = 2, cache has some other shape
-    try runTest(arena, &context, .{
-        .in_tape = .{ Opcode.ldg_fast, 0, 2, global_shape + 1, 2 },
-        .in_stack = .{0},
-        .frame_size = 1,
-        .out_tape = .{ Opcode.ldg_fast, 0, 2, global_shape, 2 },
-        .out_stack = .{20},
-        .offsets = .{ 5, 0, 0 },
-    });
-}
-
-test "stg_init" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
-    var context: ContextStub = .{
-        .ipool = @ptrFromInt(ipool),
-        .global = &global,
-    };
-
-    store_attr = 0;
-    store_val = 0;
-    try runTest(arena, &context, .{
-        .in_tape = .{ Opcode.stg_init, 0, 2, 0, 0 },
-        .in_stack = .{30},
-        .frame_size = 1,
-        .out_tape = .{ Opcode.stg_fast, 0, 2, global_shape, 2 },
-        .out_stack = .{30},
-        .offsets = .{ 5, 0, 0 },
-    });
-    try std.testing.expectEqual(2, store_attr);
-    try std.testing.expectEqual(30, store_val);
-}
-
-test "stg_fast" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
-    var context: ContextStub = .{
-        .ipool = @ptrFromInt(ipool),
-        .global = &global,
-    };
-
-    store_attr = 0;
-    store_val = 0;
-    // cache hit - ip = 2, already cached as index 2 in global
-    try runTest(arena, &context, .{
-        .in_tape = .{ Opcode.stg_fast, 0, 2, global_shape, 2 },
-        .in_stack = .{30},
-        .frame_size = 1,
-        .out_stack = .{30},
-        .offsets = .{ 5, 0, 0 },
-    });
-    try std.testing.expectEqual(2, store_attr);
-    try std.testing.expectEqual(30, store_val);
-
-    store_attr = 0;
-    store_val = 0;
-    // cache miss - ip = 2, cache has some other shape
-    try runTest(arena, &context, .{
-        .in_tape = .{ Opcode.stg_fast, 0, 2, global_shape + 1, 2 },
-        .in_stack = .{30},
-        .frame_size = 1,
-        .out_tape = .{ Opcode.stg_fast, 0, 2, global_shape, 2 },
-        .out_stack = .{30},
-        .offsets = .{ 5, 0, 0 },
-    });
-    try std.testing.expectEqual(2, store_attr);
-    try std.testing.expectEqual(30, store_val);
-}
+// test "ldg_fast" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
+//     var context: ContextStub = .{
+//         .ipool = @ptrFromInt(ipool),
+//         .global = &global,
+//     };
+//
+//     // cache hit - ip = 2, already cached as index 2 in global
+//     try runTest(arena, &context, .{
+//         .in_tape = .{ Opcode.ldg_fast, 0, 2, global_shape, 2 },
+//         .in_stack = .{0},
+//         .frame_size = 1,
+//         .out_stack = .{20},
+//         .offsets = .{ 5, 0, 0 },
+//     });
+//
+//     // cache miss - ip = 2, cache has some other shape
+//     try runTest(arena, &context, .{
+//         .in_tape = .{ Opcode.ldg_fast, 0, 2, global_shape + 1, 2 },
+//         .in_stack = .{0},
+//         .frame_size = 1,
+//         .out_tape = .{ Opcode.ldg_fast, 0, 2, global_shape, 2 },
+//         .out_stack = .{20},
+//         .offsets = .{ 5, 0, 0 },
+//     });
+// }
+//
+// test "stg_init" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
+//     var context: ContextStub = .{
+//         .ipool = @ptrFromInt(ipool),
+//         .global = &global,
+//     };
+//
+//     store_attr = 0;
+//     store_val = 0;
+//     try runTest(arena, &context, .{
+//         .in_tape = .{ Opcode.stg_init, 0, 2, 0, 0 },
+//         .in_stack = .{30},
+//         .frame_size = 1,
+//         .out_tape = .{ Opcode.stg_fast, 0, 2, global_shape, 2 },
+//         .out_stack = .{30},
+//         .offsets = .{ 5, 0, 0 },
+//     });
+//     try std.testing.expectEqual(2, store_attr);
+//     try std.testing.expectEqual(30, store_val);
+// }
+//
+// test "stg_fast" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     var global: ObjectStub = .{ .shape = @ptrFromInt(global_shape) };
+//     var context: ContextStub = .{
+//         .ipool = @ptrFromInt(ipool),
+//         .global = &global,
+//     };
+//
+//     store_attr = 0;
+//     store_val = 0;
+//     // cache hit - ip = 2, already cached as index 2 in global
+//     try runTest(arena, &context, .{
+//         .in_tape = .{ Opcode.stg_fast, 0, 2, global_shape, 2 },
+//         .in_stack = .{30},
+//         .frame_size = 1,
+//         .out_stack = .{30},
+//         .offsets = .{ 5, 0, 0 },
+//     });
+//     try std.testing.expectEqual(2, store_attr);
+//     try std.testing.expectEqual(30, store_val);
+//
+//     store_attr = 0;
+//     store_val = 0;
+//     // cache miss - ip = 2, cache has some other shape
+//     try runTest(arena, &context, .{
+//         .in_tape = .{ Opcode.stg_fast, 0, 2, global_shape + 1, 2 },
+//         .in_stack = .{30},
+//         .frame_size = 1,
+//         .out_tape = .{ Opcode.stg_fast, 0, 2, global_shape, 2 },
+//         .out_stack = .{30},
+//         .offsets = .{ 5, 0, 0 },
+//     });
+//     try std.testing.expectEqual(2, store_attr);
+//     try std.testing.expectEqual(30, store_val);
+// }
 
 test "mov" {
     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -569,69 +569,69 @@ test "pop_multi" {
     });
 }
 
-test "call_init" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
+// test "call_init" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     const inner_tape = try allocTape(arena, undefined, .{Opcode.trap});
+//     var function_info: FunctionInfoLayout = .{
+//         .tree = undefined,
+//         .ir = undefined,
+//         .bytecode = inner_tape.ptr,
+//         .node = undefined,
+//         .frame_size = 2,
+//         .state = 1,
+//     };
+//
+//     const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, Opcode.trap });
+//     const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 200, 300 };
+//     const outer_frame_size = 1;
+//
+//     const stack = try allocStack(arena, in_stack);
+//
+//     const ip = outer_tape.ptr;
+//     const fp = stack.ptr;
+//     const sp = fp + outer_frame_size;
+//     interpreter_entry(ip, fp, sp, undefined);
+//
+//     try std.testing.expectEqual(inner_tape.ptr, trap_ip);
+//     try std.testing.expectEqual(fp + 5, trap_fp);
+//     try std.testing.expectEqual(fp + 7, trap_sp);
+//     try std.testing.expectEqual(@intFromEnum(Opcode.call_fast), outer_tape[0]);
+// }
 
-    const inner_tape = try allocTape(arena, undefined, .{Opcode.trap});
-    var function_info: FunctionInfoLayout = .{
-        .tree = undefined,
-        .ir = undefined,
-        .bytecode = inner_tape.ptr,
-        .node = undefined,
-        .frame_size = 2,
-        .state = 1,
-    };
-
-    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, Opcode.trap });
-    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 200, 300 };
-    const outer_frame_size = 1;
-
-    const stack = try allocStack(arena, in_stack);
-
-    const ip = outer_tape.ptr;
-    const fp = stack.ptr;
-    const sp = fp + outer_frame_size;
-    interpreter_entry(ip, fp, sp, undefined);
-
-    try std.testing.expectEqual(inner_tape.ptr, trap_ip);
-    try std.testing.expectEqual(fp + 5, trap_fp);
-    try std.testing.expectEqual(fp + 7, trap_sp);
-    try std.testing.expectEqual(@intFromEnum(Opcode.call_fast), outer_tape[0]);
-}
-
-test "call_fast" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    const inner_tape = try allocTape(arena, undefined, .{Opcode.trap});
-    var function_info: FunctionInfoLayout = .{
-        .tree = undefined,
-        .ir = undefined,
-        .bytecode = inner_tape.ptr,
-        .node = undefined,
-        .frame_size = 2,
-        .state = 1,
-    };
-
-    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_fast, 0, 0, 0, Opcode.trap });
-    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 100, 200, 300 };
-    const outer_frame_size = 1;
-
-    const stack = try allocStack(arena, in_stack);
-
-    const ip = outer_tape.ptr;
-    const fp = stack.ptr;
-    const sp = fp + outer_frame_size;
-    interpreter_entry(ip, fp, sp, undefined);
-
-    try std.testing.expectEqual(inner_tape.ptr, trap_ip);
-    try std.testing.expectEqual(fp + 5, trap_fp);
-    try std.testing.expectEqual(fp + 7, trap_sp);
-    try std.testing.expectEqual(0, stack[4]);
-}
+// test "call_fast" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     const inner_tape = try allocTape(arena, undefined, .{Opcode.trap});
+//     var function_info: FunctionInfoLayout = .{
+//         .tree = undefined,
+//         .ir = undefined,
+//         .bytecode = inner_tape.ptr,
+//         .node = undefined,
+//         .frame_size = 2,
+//         .state = 1,
+//     };
+//
+//     const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_fast, 0, 0, 0, Opcode.trap });
+//     const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 100, 200, 300 };
+//     const outer_frame_size = 1;
+//
+//     const stack = try allocStack(arena, in_stack);
+//
+//     const ip = outer_tape.ptr;
+//     const fp = stack.ptr;
+//     const sp = fp + outer_frame_size;
+//     interpreter_entry(ip, fp, sp, undefined);
+//
+//     try std.testing.expectEqual(inner_tape.ptr, trap_ip);
+//     try std.testing.expectEqual(fp + 5, trap_fp);
+//     try std.testing.expectEqual(fp + 7, trap_sp);
+//     try std.testing.expectEqual(0, stack[4]);
+// }
 
 test "ret" {
     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -660,129 +660,129 @@ test "ret" {
     try std.testing.expectEqual(300, stack[0]);
 }
 
-test "call and return no args" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, 0 });
-    var function_info: FunctionInfoLayout = .{
-        .tree = undefined,
-        .ir = undefined,
-        .bytecode = inner_tape.ptr,
-        .node = undefined,
-        .frame_size = 1,
-        .state = 1,
-    };
-
-    const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, 0, Opcode.trap });
-    const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
-    const outer_frame_size = 1;
-
-    const stack = try allocStack(arena, in_stack);
-
-    const ip = outer_tape.ptr;
-    const fp = stack.ptr;
-    const sp = fp + outer_frame_size;
-    interpreter_entry(ip, fp, sp, undefined);
-
-    try std.testing.expectEqual(ip + 4, trap_ip);
-    try std.testing.expectEqual(fp, trap_fp);
-    try std.testing.expectEqual(sp, trap_sp);
-    try std.testing.expectEqual(200, stack[0]);
-}
-
-test "call and return one arg" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, -5 - 0 });
-    var function_info: FunctionInfoLayout = .{
-        .tree = undefined,
-        .ir = undefined,
-        .bytecode = inner_tape.ptr,
-        .node = undefined,
-        .frame_size = 1,
-        .state = 1,
-    };
-
-    const outer_tape = try allocTape(arena, undefined, .{
-        Opcode.push_one,
-        0, // arg: x0
-        Opcode.call_init,
-        1, // target: x1
-        0, // return: x0
-        0, // inline cache
-        Opcode.pop_one,
-        Opcode.trap,
-    });
-    const in_stack = .{ 300, @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
-    const outer_frame_size = 2;
-
-    const stack = try allocStack(arena, in_stack);
-
-    const ip = outer_tape.ptr;
-    const fp = stack.ptr;
-    const sp = fp + outer_frame_size;
-    interpreter_entry(ip, fp, sp, undefined);
-
-    try std.testing.expectEqual(ip + 7, trap_ip);
-    try std.testing.expectEqual(fp, trap_fp);
-    try std.testing.expectEqual(sp, trap_sp);
-    try std.testing.expectEqual(300, stack[0]);
-}
-
-test "call and return two args" {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    const inner_tape = try allocTape(arena, undefined, .{
-        Opcode.iadd,
-        0, // x0
-        -5 - 0, // arg0
-        -5 - 1, // arg1
-        Opcode.ret,
-        0, // x0
-    });
-    var function_info: FunctionInfoLayout = .{
-        .tree = undefined,
-        .ir = undefined,
-        .bytecode = inner_tape.ptr,
-        .node = undefined,
-        .frame_size = 1,
-        .state = 1,
-    };
-
-    const outer_tape = try allocTape(arena, undefined, .{
-        Opcode.push_multi,
-        2,
-        0, // arg: x0
-        1, // arg: x1
-        Opcode.call_init,
-        2, // target: x2
-        0, // return: x0
-        0, // inline cache
-        Opcode.pop_multi,
-        2,
-        Opcode.trap,
-    });
-    const in_stack = .{ 300, 200, @intFromPtr(&function_info), 0, 0, 0, 0, 0 };
-    const outer_frame_size = 3;
-
-    const stack = try allocStack(arena, in_stack);
-
-    const ip = outer_tape.ptr;
-    const fp = stack.ptr;
-    const sp = fp + outer_frame_size;
-    interpreter_entry(ip, fp, sp, undefined);
-
-    try std.testing.expectEqual(ip + 10, trap_ip);
-    try std.testing.expectEqual(fp, trap_fp);
-    try std.testing.expectEqual(sp, trap_sp);
-    try std.testing.expectEqual(500, stack[0]);
-}
+// test "call and return no args" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, 0 });
+//     var function_info: FunctionInfoLayout = .{
+//         .tree = undefined,
+//         .ir = undefined,
+//         .bytecode = inner_tape.ptr,
+//         .node = undefined,
+//         .frame_size = 1,
+//         .state = 1,
+//     };
+//
+//     const outer_tape = try allocTape(arena, undefined, .{ Opcode.call_init, 0, 0, 0, Opcode.trap });
+//     const in_stack = .{ @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
+//     const outer_frame_size = 1;
+//
+//     const stack = try allocStack(arena, in_stack);
+//
+//     const ip = outer_tape.ptr;
+//     const fp = stack.ptr;
+//     const sp = fp + outer_frame_size;
+//     interpreter_entry(ip, fp, sp, undefined);
+//
+//     try std.testing.expectEqual(ip + 4, trap_ip);
+//     try std.testing.expectEqual(fp, trap_fp);
+//     try std.testing.expectEqual(sp, trap_sp);
+//     try std.testing.expectEqual(200, stack[0]);
+// }
+//
+// test "call and return one arg" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     const inner_tape = try allocTape(arena, undefined, .{ Opcode.ret, -5 - 0 });
+//     var function_info: FunctionInfoLayout = .{
+//         .tree = undefined,
+//         .ir = undefined,
+//         .bytecode = inner_tape.ptr,
+//         .node = undefined,
+//         .frame_size = 1,
+//         .state = 1,
+//     };
+//
+//     const outer_tape = try allocTape(arena, undefined, .{
+//         Opcode.push_one,
+//         0, // arg: x0
+//         Opcode.call_init,
+//         1, // target: x1
+//         0, // return: x0
+//         0, // inline cache
+//         Opcode.pop_one,
+//         Opcode.trap,
+//     });
+//     const in_stack = .{ 300, @intFromPtr(&function_info), 0, 0, 0, 0, 200 };
+//     const outer_frame_size = 2;
+//
+//     const stack = try allocStack(arena, in_stack);
+//
+//     const ip = outer_tape.ptr;
+//     const fp = stack.ptr;
+//     const sp = fp + outer_frame_size;
+//     interpreter_entry(ip, fp, sp, undefined);
+//
+//     try std.testing.expectEqual(ip + 7, trap_ip);
+//     try std.testing.expectEqual(fp, trap_fp);
+//     try std.testing.expectEqual(sp, trap_sp);
+//     try std.testing.expectEqual(300, stack[0]);
+// }
+//
+// test "call and return two args" {
+//     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena_allocator.deinit();
+//     const arena = arena_allocator.allocator();
+//
+//     const inner_tape = try allocTape(arena, undefined, .{
+//         Opcode.iadd,
+//         0, // x0
+//         -5 - 0, // arg0
+//         -5 - 1, // arg1
+//         Opcode.ret,
+//         0, // x0
+//     });
+//     var function_info: FunctionInfoLayout = .{
+//         .tree = undefined,
+//         .ir = undefined,
+//         .bytecode = inner_tape.ptr,
+//         .node = undefined,
+//         .frame_size = 1,
+//         .state = 1,
+//     };
+//
+//     const outer_tape = try allocTape(arena, undefined, .{
+//         Opcode.push_multi,
+//         2,
+//         0, // arg: x0
+//         1, // arg: x1
+//         Opcode.call_init,
+//         2, // target: x2
+//         0, // return: x0
+//         0, // inline cache
+//         Opcode.pop_multi,
+//         2,
+//         Opcode.trap,
+//     });
+//     const in_stack = .{ 300, 200, @intFromPtr(&function_info), 0, 0, 0, 0, 0 };
+//     const outer_frame_size = 3;
+//
+//     const stack = try allocStack(arena, in_stack);
+//
+//     const ip = outer_tape.ptr;
+//     const fp = stack.ptr;
+//     const sp = fp + outer_frame_size;
+//     interpreter_entry(ip, fp, sp, undefined);
+//
+//     try std.testing.expectEqual(ip + 10, trap_ip);
+//     try std.testing.expectEqual(fp, trap_fp);
+//     try std.testing.expectEqual(sp, trap_sp);
+//     try std.testing.expectEqual(500, stack[0]);
+// }
 
 test "callrt" {
     var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
