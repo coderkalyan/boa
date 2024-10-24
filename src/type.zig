@@ -105,8 +105,11 @@ pub const Type = union(enum) {
         return switch (a_tag) {
             .@"union" => std.mem.eql(InternPool.Index, a.@"union", b.@"union"),
             .object => {
-                if (a.object.len == 0) return b.object.len == 0;
-                return std.mem.eql(u8, asBytes(a.object), asBytes(b.object));
+                if (a.object.len != b.object.len) return false;
+                for (a.object, b.object) |a_attr, b_attr| {
+                    if (!std.meta.eql(a_attr, b_attr)) return false;
+                }
+                return true;
             },
             inline else => std.meta.eql(a, b),
         };
